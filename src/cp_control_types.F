@@ -620,11 +620,16 @@ MODULE cp_control_types
 ! **************************************************************************************************
 ! \brief Control parameters for the planar counter charge density
 ! **************************************************************************************************
+   INTEGER, PARAMETER, PUBLIC                :: pcc_mode_single = 1, &
+                                                pcc_mode_double = 2
+
    TYPE pcc_control_type
-      INTEGER                              :: surf_normal = 0
+      INTEGER                              :: surf_normal = 0, &
+                                              mode = pcc_mode_double
       REAL(KIND=dp)                        :: dist_edge = 0.0_dp, &
                                               gau_a = 0.0_dp, &
                                               gau_c = 0.0_dp, &
+                                              plane_position = 0.0_dp, &
                                               charge = 0.0_dp
    END TYPE pcc_control_type
 

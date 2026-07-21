@@ -148,9 +148,11 @@ MODULE scf_control_types
    END TYPE scf_control_type
 
    TYPE gce_type
-      LOGICAL                               :: do_gce = .FALSE.
+      LOGICAL                               :: do_gce = .FALSE., &
+                                               ref_position_explicit = .FALSE.
       REAL(KIND=dp)                         :: target_workfunction = 0.16_dp, &
                                                ref_esp = 0.0_dp, &
+                                               ref_position = 0.0_dp, &
                                                mixing_coef = 0.3_dp, &
                                                prev_workfunction = -1001.0_dp, &
                                                nelec = 0.0_dp
@@ -573,6 +575,8 @@ CONTAINS
       gce%target_workfunction = 0.16_dp
       gce%prev_workfunction = -1001.0_dp
       gce%ref_esp = 0.0_dp
+      gce%ref_position = 0.0_dp
+      gce%ref_position_explicit = .FALSE.
       gce%mixing_coef = 0.3_dp
    END SUBROUTINE init_gce
 
@@ -592,6 +596,10 @@ CONTAINS
                                    r_val=gce%target_workfunction)
          CALL section_vals_val_get(gce_section, "MIXING_COEF", &
                                    r_val=gce%mixing_coef)
+         CALL section_vals_val_get(gce_section, "REFERENCE_POSITION", &
+                                   explicit=gce%ref_position_explicit)
+         IF (gce%ref_position_explicit) &
+            CALL section_vals_val_get(gce_section, "REFERENCE_POSITION", r_val=gce%ref_position)
       END IF ! do gce
    END SUBROUTINE read_gce_section
 

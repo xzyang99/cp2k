@@ -2707,7 +2707,7 @@ CONTAINS
                           name="PLANAR_COUNTER_CHARGE", &
                           description="Define the parameters for the planar counter charge density", &
                           citations=[Chai2024a], &
-                          n_keywords=4, &
+                          n_keywords=6, &
                           n_subsections=0, &
                           repeats=.FALSE.)
 
@@ -2722,6 +2722,18 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+      CALL keyword_create(keyword, __LOCATION__, name="MODE", &
+                          enum_c_vals=s2a('DOUBLE', 'SINGLE'), &
+                          enum_i_vals=[2, 1], &
+                          description="Selects the legacy symmetric pair of counter charge planes or a single plane.", &
+                          enum_desc=s2a("Two planes at equal distances from the cell boundaries", &
+                                        "One plane at PLANE_POSITION"), &
+                          n_var=1, &
+                          default_i_val=2, &
+                          usage="MODE DOUBLE")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
       CALL keyword_create(keyword, __LOCATION__, name="PARALLEL_PLANE", &
                           enum_c_vals=s2a('XY', 'YZ', 'XZ'), &
                           enum_i_vals=[3, 1, 2], &
@@ -2730,6 +2742,17 @@ CONTAINS
                           n_var=1, &
                           default_i_val=3, &
                           usage="PARALLEL_PLANE XY")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="PLANE_POSITION", &
+                          description="Position of the Gaussian center measured from the lower cell boundary "// &
+                          "along the surface normal. The position is mapped to an integer real-space grid "// &
+                          "offset in the same way as DIST_EDGE. Used only with MODE SINGLE.", &
+                          usage="PLANE_POSITION 10.0", &
+                          unit_str="angstrom", &
+                          type_of_var=real_t)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

@@ -20,8 +20,8 @@ MODULE cp_control_utils
    USE cp_control_types,                ONLY: &
         admm_control_create, admm_control_type, ddapc_control_create, ddapc_restraint_type, &
         dft_control_create, dft_control_type, efield_type, expot_control_create, &
-        maxwell_control_create, qs_control_type, rixs_control_type, tddfpt2_control_type, &
-        xtb_control_type, xtb_reference_cli_type
+        maxwell_control_create, pcc_mode_double, pcc_mode_single, qs_control_type, &
+        rixs_control_type, tddfpt2_control_type, xtb_control_type, xtb_reference_cli_type
    USE cp_files,                        ONLY: close_file,&
                                               open_file
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
@@ -128,8 +128,9 @@ CONTAINS
          DIMENSION(:), POINTER                           :: tmpstringlist
       INTEGER                                            :: admmtype, irep, isize, kg_tnadd_method, &
                                                             method_id, nrep, xc_deriv_method_id
-      LOGICAL :: at_end, do_hfx, do_ot, do_rpa_admm, do_rtp, exopt1, exopt2, exopt3, explicit, &
-         is_present, l_param, local_moment_possible, native_skala_grid, not_SE, was_present
+      LOGICAL :: at_end, dist_edge_explicit, do_hfx, do_ot, do_rpa_admm, do_rtp, exopt1, exopt2, &
+         exopt3, explicit, is_present, l_param, local_moment_possible, native_skala_grid, not_SE, &
+         plane_position_explicit, was_present
       REAL(KIND=dp)                                      :: density_cut, gradient_cut, tau_cut
       REAL(KIND=dp), DIMENSION(:), POINTER               :: pol
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -820,12 +821,43 @@ CONTAINS
                                    l_val=dft_control%do_pcc)
          IF (dft_control%do_pcc) THEN
             ALLOCATE (dft_control%pcc_control)
-            CALL section_vals_val_get(tmp_section, "DIST_EDGE", &
-                                      r_val=dft_control%pcc_control%dist_edge)
+            CALL section_vals_val_get(tmp_section, "MODE", &
+                                      i_val=dft_control%pcc_control%mode)
             CALL section_vals_val_get(tmp_section, "GAU_C", &
                                       r_val=dft_control%pcc_control%gau_c)
             CALL section_vals_val_get(tmp_section, "PARALLEL_PLANE", &
                                       i_val=dft_control%pcc_control%surf_normal)
+            SELECT CASE (dft_control%pcc_control%mode)
+            CASE (pcc_mode_double)
+               CALL section_vals_val_get(tmp_section, "DIST_EDGE", &
+                                         r_val=dft_control%pcc_control%dist_edge)
+               CALL section_vals_val_get(tmp_section, "PLANE_POSITION", &
+                                         explicit=plane_position_explicit)
+               IF (plane_position_explicit) &
+                  CPABORT("PLANAR_COUNTER_CHARGE%PLANE_POSITION is only valid with MODE SINGLE.")
+            CASE (pcc_mode_single)
+               CALL section_vals_val_get(tmp_section, "PLANE_POSITION", &
+                                         explicit=plane_position_explicit)
+               IF (.NOT. plane_position_explicit) &
+                  CPABORT("PLANAR_COUNTER_CHARGE with MODE SINGLE requires PLANE_POSITION.")
+               CALL section_vals_val_get(tmp_section, "PLANE_POSITION", &
+                                         r_val=dft_control%pcc_control%plane_position)
+               CALL section_vals_val_get(tmp_section, "DIST_EDGE", explicit=dist_edge_explicit)
+               IF (dist_edge_explicit) &
+                  CPABORT("PLANAR_COUNTER_CHARGE%DIST_EDGE is not valid with MODE SINGLE.")
+               IF (dft_control%pcc_control%gau_c <= 0.0_dp) &
+                  CPABORT("PLANAR_COUNTER_CHARGE%GAU_C must be positive with MODE SINGLE.")
+               IF (.NOT. dft_control%correct_surf_dip) &
+                  CPABORT("PLANAR_COUNTER_CHARGE with MODE SINGLE requires SURFACE_DIPOLE_CORRECTION.")
+               IF (dft_control%pcc_control%surf_normal /= dft_control%dir_surf_dip) &
+                  CPABORT("PLANAR_COUNTER_CHARGE and surface dipole correction normals must match.")
+               IF (dft_control%switch_surf_dip) &
+                  CPABORT("SURF_DIP_SWITCH is not compatible with PLANAR_COUNTER_CHARGE MODE SINGLE.")
+               IF (.NOT. ALL(cell%perd == 1)) &
+                  CPABORT("PLANAR_COUNTER_CHARGE MODE SINGLE requires a 3D periodic cell.")
+            CASE DEFAULT
+               CPABORT("Invalid PLANAR_COUNTER_CHARGE mode.")
+            END SELECT
          END IF
       END IF
 

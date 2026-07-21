@@ -12,7 +12,9 @@
 MODULE gce_methods
 
    USE cp_control_types,                ONLY: dft_control_type,&
-                                              pcc_control_type
+                                              pcc_control_type,&
+                                              pcc_mode_double,&
+                                              pcc_mode_single
    USE kinds,                           ONLY: dp
    USE message_passing,                 ONLY: mp_para_env_type
    USE pw_methods,                      ONLY: pw_axpy,&
@@ -70,26 +72,32 @@ CONTAINS
 ! **************************************************************************************************
 !> \brief calculate the planar averaged real space potential (e.g. Hartree potential) along the
 !>        surface normal of a slab model and the corresponding reference (electrostatic) energy
-!>        near the simulation cell edge.
+!>        at the requested reference position, or near the simulation cell edge by default.
 !> \param v_rspace ...
 !> \param dft_control ...
 !> \param do_gce ...
 !> \param ref_esp ...
 !> \param para_env ...
+!> \param ref_position ...
+!> \param ref_position_explicit ...
 !> \author Ziwei Chai
 ! **************************************************************************************************
-   SUBROUTINE planar_averaged_v_hartree_3d(v_rspace, dft_control, do_gce, ref_esp, para_env)
+   SUBROUTINE planar_averaged_v_hartree_3d(v_rspace, dft_control, do_gce, ref_esp, para_env, &
+                                           ref_position, ref_position_explicit)
 
       TYPE(pw_r3d_rs_type), INTENT(IN)                   :: v_rspace
       TYPE(dft_control_type), POINTER                    :: dft_control
       LOGICAL, INTENT(IN)                                :: do_gce
       REAL(KIND=dp), INTENT(INOUT)                       :: ref_esp
       TYPE(mp_para_env_type), POINTER                    :: para_env
+      REAL(KIND=dp), INTENT(IN), OPTIONAL                :: ref_position
+      LOGICAL, INTENT(IN), OPTIONAL                      :: ref_position_explicit
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'planar_averaged_v_hartree_3d'
 
-      INTEGER                                            :: a, b, c, handle, x, y, z
-      REAL(KIND=dp)                                      :: my_ref_esp, ngrids_in_plane
+      INTEGER                                            :: a, b, c, handle, iref, x, y, z
+      REAL(KIND=dp)                                      :: dz, my_ref_esp, ngrids_in_plane, &
+                                                            normal_length
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: profile, profile_local
 
       CALL timeset(routineN, handle)
@@ -100,17 +108,29 @@ CONTAINS
          CALL get_planar_axes(dft_control%pcc_control%surf_normal, a, b, c)
 
          my_ref_esp = 0.0_dp
+         iref = v_rspace%pw_grid%bounds(2, c)
+         IF (PRESENT(ref_position_explicit)) THEN
+            IF (ref_position_explicit) THEN
+               CPASSERT(PRESENT(ref_position))
+               dz = v_rspace%pw_grid%dr(c)
+               normal_length = dz*REAL(v_rspace%pw_grid%npts(c), dp)
+               IF (ref_position < 0.0_dp .OR. ref_position >= normal_length) &
+                  CPABORT("GCE%REFERENCE_POSITION must lie within the cell along the surface normal.")
+               iref = v_rspace%pw_grid%bounds(1, c) + &
+                      MODULO(NINT(ref_position/dz), v_rspace%pw_grid%npts(c))
+            END IF
+         END IF
          z = v_rspace%pw_grid%npts(a)*v_rspace%pw_grid%npts(b)
          ngrids_in_plane = REAL(z, dp)
 
 !$OMP    PARALLEL DO DEFAULT(NONE) &
 !$OMP                PRIVATE(x,y,z) &
-!$OMP                SHARED(v_rspace,A,b,c)&
+!$OMP                SHARED(v_rspace,A,b,c,iref)&
 !$OMP                REDUCTION(+:my_ref_esp)
          DO y = v_rspace%pw_grid%bounds_local(1, b), v_rspace%pw_grid%bounds_local(2, b)
             DO x = v_rspace%pw_grid%bounds_local(1, a), v_rspace%pw_grid%bounds_local(2, a)
                DO z = v_rspace%pw_grid%bounds_local(1, c), v_rspace%pw_grid%bounds_local(2, c)
-                  IF (z == v_rspace%pw_grid%bounds(2, c)) THEN
+                  IF (z == iref) THEN
                      IF (c == 3) THEN
                         my_ref_esp = v_rspace%array(x, y, z) + my_ref_esp
                      ELSE IF (c == 2) THEN
@@ -196,7 +216,8 @@ CONTAINS
 
       INTEGER                                            :: a, b, c, handle, lcenter, ucenter, x, y, &
                                                             z
-      REAL(KIND=dp)                                      :: dz, gau_a, tot_charge, val
+      REAL(KIND=dp)                                      :: delta, dz, gau_a, normal_length, &
+                                                            tot_charge, val
       TYPE(pw_c1d_gs_type)                               :: pcc_density_g
       TYPE(pw_r3d_rs_type)                               :: pcc_density_r
 
@@ -216,25 +237,52 @@ CONTAINS
 
       dz = pcc_density_r%pw_grid%dr(c)
 
-      ucenter = pcc_density_r%pw_grid%bounds(2, c) - INT(pcc_env%dist_edge/dz)
-      lcenter = pcc_density_r%pw_grid%bounds(1, c) + INT(pcc_env%dist_edge/dz)
       gau_a = 1.0_dp
+      SELECT CASE (pcc_env%mode)
+      CASE (pcc_mode_double)
+         ucenter = pcc_density_r%pw_grid%bounds(2, c) - INT(pcc_env%dist_edge/dz)
+         lcenter = pcc_density_r%pw_grid%bounds(1, c) + INT(pcc_env%dist_edge/dz)
 !$OMP    PARALLEL DO DEFAULT(NONE) &
 !$OMP                PRIVATE(x,y,z,val) &
 !$OMP                SHARED(pcc_density_r,gau_a,ucenter,lcenter,A,b,c,dz,pcc_env)
-      DO z = pcc_density_r%pw_grid%bounds_local(1, c), pcc_density_r%pw_grid%bounds_local(2, c)
-         val = gau_a*EXP(-(dz*REAL(z - ucenter, dp))**2.0_dp/(2.0_dp*pcc_env%gau_c**2.0_dp))
-         val = val + gau_a*EXP(-(dz*REAL(z - lcenter, dp))**2.0_dp/(2.0_dp*pcc_env%gau_c**2.0_dp))
-         IF (val < 1.0E-15_dp) val = 0.0_dp
-         DO y = pcc_density_r%pw_grid%bounds_local(1, b), pcc_density_r%pw_grid%bounds_local(2, b)
-            DO x = pcc_density_r%pw_grid%bounds_local(1, a), pcc_density_r%pw_grid%bounds_local(2, a)
-               IF (c == 3) pcc_density_r%array(x, y, z) = val
-               IF (c == 2) pcc_density_r%array(y, z, x) = val
-               IF (c == 1) pcc_density_r%array(z, x, y) = val
+         DO z = pcc_density_r%pw_grid%bounds_local(1, c), pcc_density_r%pw_grid%bounds_local(2, c)
+            val = gau_a*EXP(-(dz*REAL(z - ucenter, dp))**2.0_dp/(2.0_dp*pcc_env%gau_c**2.0_dp))
+            val = val + gau_a*EXP(-(dz*REAL(z - lcenter, dp))**2.0_dp/(2.0_dp*pcc_env%gau_c**2.0_dp))
+            IF (val < 1.0E-15_dp) val = 0.0_dp
+            DO y = pcc_density_r%pw_grid%bounds_local(1, b), pcc_density_r%pw_grid%bounds_local(2, b)
+               DO x = pcc_density_r%pw_grid%bounds_local(1, a), pcc_density_r%pw_grid%bounds_local(2, a)
+                  IF (c == 3) pcc_density_r%array(x, y, z) = val
+                  IF (c == 2) pcc_density_r%array(y, z, x) = val
+                  IF (c == 1) pcc_density_r%array(z, x, y) = val
+               END DO
             END DO
          END DO
-      END DO
 !$OMP    END PARALLEL DO
+      CASE (pcc_mode_single)
+         normal_length = dz*REAL(pcc_density_r%pw_grid%npts(c), dp)
+         IF (pcc_env%plane_position < 0.0_dp .OR. pcc_env%plane_position >= normal_length) &
+            CPABORT("PLANAR_COUNTER_CHARGE%PLANE_POSITION must lie within the cell along the surface normal.")
+         lcenter = pcc_density_r%pw_grid%bounds(1, c) + INT(pcc_env%plane_position/dz)
+!$OMP    PARALLEL DO DEFAULT(NONE) &
+!$OMP                PRIVATE(delta,x,y,z,val) &
+!$OMP                SHARED(pcc_density_r,gau_a,lcenter,normal_length,A,b,c,dz,pcc_env)
+         DO z = pcc_density_r%pw_grid%bounds_local(1, c), pcc_density_r%pw_grid%bounds_local(2, c)
+            delta = ABS(dz*REAL(z - lcenter, dp))
+            delta = MIN(delta, normal_length - delta)
+            val = gau_a*EXP(-delta**2.0_dp/(2.0_dp*pcc_env%gau_c**2.0_dp))
+            IF (val < 1.0E-15_dp) val = 0.0_dp
+            DO y = pcc_density_r%pw_grid%bounds_local(1, b), pcc_density_r%pw_grid%bounds_local(2, b)
+               DO x = pcc_density_r%pw_grid%bounds_local(1, a), pcc_density_r%pw_grid%bounds_local(2, a)
+                  IF (c == 3) pcc_density_r%array(x, y, z) = val
+                  IF (c == 2) pcc_density_r%array(y, z, x) = val
+                  IF (c == 1) pcc_density_r%array(z, x, y) = val
+               END DO
+            END DO
+         END DO
+!$OMP    END PARALLEL DO
+      CASE DEFAULT
+         CPABORT("Invalid planar counter charge mode.")
+      END SELECT
 
       tot_charge = tot_charge/pw_integrate_function(pcc_density_r, isign=1)
       CALL pw_scale(pcc_density_r, tot_charge)

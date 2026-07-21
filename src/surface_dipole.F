@@ -48,27 +48,35 @@ CONTAINS
 !> \brief compute the surface dipole and the correction to the hartree potential
 !> \param qs_env the qs environment
 !> \param energy ...
+!> \param rho_tot_gspace optional total density including a planar counter charge
+!> \param ref_position optional GCE reference position
+!> \param ref_position_explicit whether the GCE reference position was explicitly set
+!> \param ref_esp_correction dipole-potential correction at the GCE reference position
 !> \par History
 !>      01.2014 created [MI]
 !> \author MI
 !> \author Soumya Ghosh added SURF_DIP_POS 19.11.2018
 ! **************************************************************************************************
 
-   SUBROUTINE calc_dipsurf_potential(qs_env, energy)
+   SUBROUTINE calc_dipsurf_potential(qs_env, energy, rho_tot_gspace, ref_position, &
+                                     ref_position_explicit, ref_esp_correction)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_energy_type), POINTER                      :: energy
+      TYPE(pw_c1d_gs_type), INTENT(IN), OPTIONAL         :: rho_tot_gspace
+      REAL(KIND=dp), INTENT(IN), OPTIONAL                :: ref_position
+      LOGICAL, INTENT(IN), OPTIONAL                      :: ref_position_explicit
+      REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: ref_esp_correction
 
       CHARACTER(len=*), PARAMETER :: routineN = 'calc_dipsurf_potential'
 
       INTEGER                                            :: handle, i, idir_surfdip, ilayer_min, &
-                                                            ilow, irho, ispin, isurf, iup, jsurf, &
-                                                            width
+                                                            ilow, iref, irho, ispin, isurf, iup, &
+                                                            jsurf, width
       INTEGER, DIMENSION(3)                              :: ngrid
       INTEGER, DIMENSION(:, :), POINTER                  :: bo
-      REAL(dp)                                           :: cutoff, dh(3, 3), dip_fac, dip_hh, &
-                                                            dsurf, height_min, hh, pos_surf_dip, &
-                                                            rhoav_min, surfarea, vdip, vdip_fac
+      REAL(dp) :: cutoff, dh(3, 3), dip_fac, dip_hh, dsurf, height_min, hh, normal_length, &
+         pos_surf_dip, rhoav_min, surfarea, vdip, vdip_fac
       REAL(dp), ALLOCATABLE, DIMENSION(:)                :: rhoavsurf
       TYPE(cell_type), POINTER                           :: cell
       TYPE(dft_control_type), POINTER                    :: dft_control
@@ -102,33 +110,37 @@ CONTAINS
       CALL auxbas_pw_pool%create_pw(wf_r)
       CALL auxbas_pw_pool%create_pw(vdip_r)
 
-      IF (dft_control%qs_control%gapw) THEN
-         IF (dft_control%qs_control%gapw_control%nopaw_as_gpw) THEN
-            CALL pw_axpy(rho_core, rho0_s_gs)
-            IF (ASSOCIATED(rhoz_cneo_s_gs)) THEN
-               CALL pw_axpy(rhoz_cneo_s_gs, rho0_s_gs)
-            END IF
-            CALL pw_transfer(rho0_s_gs, wf_r)
-            CALL pw_axpy(rho_core, rho0_s_gs, -1.0_dp)
-            IF (ASSOCIATED(rhoz_cneo_s_gs)) THEN
-               CALL pw_axpy(rhoz_cneo_s_gs, rho0_s_gs, -1.0_dp)
+      IF (PRESENT(rho_tot_gspace)) THEN
+         CALL pw_transfer(rho_tot_gspace, wf_r)
+      ELSE
+         IF (dft_control%qs_control%gapw) THEN
+            IF (dft_control%qs_control%gapw_control%nopaw_as_gpw) THEN
+               CALL pw_axpy(rho_core, rho0_s_gs)
+               IF (ASSOCIATED(rhoz_cneo_s_gs)) THEN
+                  CALL pw_axpy(rhoz_cneo_s_gs, rho0_s_gs)
+               END IF
+               CALL pw_transfer(rho0_s_gs, wf_r)
+               CALL pw_axpy(rho_core, rho0_s_gs, -1.0_dp)
+               IF (ASSOCIATED(rhoz_cneo_s_gs)) THEN
+                  CALL pw_axpy(rhoz_cneo_s_gs, rho0_s_gs, -1.0_dp)
+               END IF
+            ELSE
+               IF (ASSOCIATED(rhoz_cneo_s_gs)) THEN
+                  CALL pw_axpy(rhoz_cneo_s_gs, rho0_s_gs)
+               END IF
+               CALL pw_transfer(rho0_s_gs, wf_r)
+               IF (ASSOCIATED(rhoz_cneo_s_gs)) THEN
+                  CALL pw_axpy(rhoz_cneo_s_gs, rho0_s_gs, -1.0_dp)
+               END IF
             END IF
          ELSE
-            IF (ASSOCIATED(rhoz_cneo_s_gs)) THEN
-               CALL pw_axpy(rhoz_cneo_s_gs, rho0_s_gs)
-            END IF
-            CALL pw_transfer(rho0_s_gs, wf_r)
-            IF (ASSOCIATED(rhoz_cneo_s_gs)) THEN
-               CALL pw_axpy(rhoz_cneo_s_gs, rho0_s_gs, -1.0_dp)
-            END IF
+            CALL pw_transfer(rho_core, wf_r)
          END IF
-      ELSE
-         CALL pw_transfer(rho_core, wf_r)
+         CALL qs_rho_get(rho, rho_r=rho_r)
+         DO ispin = 1, dft_control%nspins
+            CALL pw_axpy(rho_r(ispin), wf_r)
+         END DO
       END IF
-      CALL qs_rho_get(rho, rho_r=rho_r)
-      DO ispin = 1, dft_control%nspins
-         CALL pw_axpy(rho_r(ispin), wf_r)
-      END DO
 
       ngrid(1:3) = wf_r%pw_grid%npts(1:3)
       idir_surfdip = dft_control%dir_surf_dip
@@ -150,6 +162,19 @@ CONTAINS
 
       ilow = wf_r%pw_grid%bounds(1, idir_surfdip)
       iup = wf_r%pw_grid%bounds(2, idir_surfdip)
+      IF (PRESENT(ref_esp_correction)) THEN
+         iref = iup
+         IF (PRESENT(ref_position_explicit)) THEN
+            IF (ref_position_explicit) THEN
+               CPASSERT(PRESENT(ref_position))
+               normal_length = wf_r%pw_grid%dr(idir_surfdip)*REAL(ngrid(idir_surfdip), dp)
+               IF (ref_position < 0.0_dp .OR. ref_position >= normal_length) &
+                  CPABORT("GCE%REFERENCE_POSITION must lie within the cell along the surface normal.")
+               iref = ilow + MODULO(NINT(ref_position/wf_r%pw_grid%dr(idir_surfdip)), &
+                                    ngrid(idir_surfdip))
+            END IF
+         END IF
+      END IF
 
       ALLOCATE (rhoavsurf(ilow:iup))
       rhoavsurf = 0.0_dp
@@ -271,6 +296,19 @@ CONTAINS
          END IF
 
       END DO
+
+      IF (PRESENT(ref_esp_correction)) THEN
+         i = iref
+         IF (i <= ilayer_min) i = i + ngrid(idir_surfdip)
+         hh = REAL((i - ilayer_min), dp)*dh(idir_surfdip, idir_surfdip)
+         IF (ABS(iref - ilayer_min) > width) THEN
+            cutoff = 1.0_dp
+         ELSE
+            cutoff = ABS(SIN(0.5_dp*pi*REAL(ABS(iref - ilayer_min), dp)/REAL(width, dp)))
+         END IF
+         ref_esp_correction = vdip_fac*(-0.5_dp + (hh/cell%hmat(idir_surfdip, idir_surfdip)))* &
+                              cutoff/surfarea
+      END IF
 
 !    Dipole correction contribution to the energy
       energy%surf_dipole = 0.5_dp*pw_integral_ab(vdip_r, wf_r, just_sum=.TRUE.)

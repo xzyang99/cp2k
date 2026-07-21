@@ -2088,7 +2088,7 @@ CONTAINS
                           "total energy and the product of the target work function "// &
                           "and N_e^(abs,alpha).", &
                           citations=[Chai2024a], &
-                          n_keywords=3, &
+                          n_keywords=4, &
                           n_subsections=0, &
                           repeats=.FALSE.)
 
@@ -2124,6 +2124,22 @@ CONTAINS
                           type_of_var=real_t, &
                           default_r_val=0.3_dp, &
                           usage="MIXING_COEF 0.3")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="REFERENCE_POSITION", &
+                          description="Position measured from the lower cell boundary along the planar counter "// &
+                          "charge surface normal at which the planar-averaged Hartree potential is used as the "// &
+                          "GCE reference. If omitted, "// &
+                          "the upper cell boundary is used as in the legacy implementation. For a single "// &
+                          "counter charge plane, choose a point in the vacuum region between that plane "// &
+                          "and the dipole-correction discontinuity along the periodic direction.", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          unit_str="angstrom", &
+                          usage="REFERENCE_POSITION [angstrom] 15.0")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

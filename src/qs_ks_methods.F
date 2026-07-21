@@ -35,7 +35,8 @@ MODULE qs_ks_methods
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind_set
    USE cell_types,                      ONLY: cell_type
-   USE cp_control_types,                ONLY: dft_control_type
+   USE cp_control_types,                ONLY: dft_control_type,&
+                                              pcc_mode_single
    USE cp_dbcsr_api,                    ONLY: &
         dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_filter, dbcsr_get_info, dbcsr_multiply, &
         dbcsr_p_type, dbcsr_release, dbcsr_set, dbcsr_type, dbcsr_type_antisymmetric, &
@@ -214,7 +215,7 @@ CONTAINS
                                                             iatom, ikind, img, ispin, natom, &
                                                             nimages, nspins, output_unit
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of
-      LOGICAL :: ace_active, do_adiabatic_rescaling, do_ddapc, do_hfx, do_kpoints, do_ppl, dokp, &
+      LOGICAL :: ace_active, correct_gce_ref, do_adiabatic_rescaling, do_ddapc, do_hfx, do_kpoints, do_ppl, dokp, &
          gapw, gapw_xc, gauxc_model_none, just_energy_xc, lrigpw, my_print, &
          native_gapw_atom_composite_reference, native_gapw_atom_composite_requested, &
          native_gapw_composite_direct_ao, native_gapw_composite_reference, &
@@ -225,7 +226,7 @@ CONTAINS
       REAL(KIND=dp) :: ecore_ppl, edisp, ee_ener, ekin_mol, mulliken_order_p, &
          native_skala_composite_contraction, native_skala_composite_rho_contraction, &
          native_skala_composite_tau_contraction, native_skala_exc_scf, native_skala_total_scf, &
-         vscale
+         ref_esp_correction, vscale
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: cdft_gapw_values
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: cdft_charge_correction, &
                                                             cdft_electronic_charge, &
@@ -479,10 +480,25 @@ CONTAINS
          END IF
       END IF
 
+      correct_gce_ref = .FALSE.
+      IF (qs_env%scf_control%gce%do_gce .AND. dft_control%correct_surf_dip) THEN
+         correct_gce_ref = qs_env%scf_control%gce%ref_position_explicit
+         IF (dft_control%do_pcc) &
+            correct_gce_ref = correct_gce_ref .OR. dft_control%pcc_control%mode == pcc_mode_single
+      END IF
       IF (dft_control%do_paep .OR. qs_env%scf_control%gce%do_gce) THEN
          CALL pw_transfer(v_hartree_gspace, v_hartree_rspace)
-         CALL planar_averaged_v_hartree_3d(v_hartree_rspace, dft_control, qs_env%scf_control%gce%do_gce, &
-                                           qs_env%scf_control%gce%ref_esp, para_env)
+         IF (qs_env%scf_control%gce%ref_position_explicit) THEN
+            CALL planar_averaged_v_hartree_3d(v_hartree_rspace, dft_control, &
+                                              qs_env%scf_control%gce%do_gce, &
+                                              qs_env%scf_control%gce%ref_esp, para_env, &
+                                              ref_position=qs_env%scf_control%gce%ref_position, &
+                                              ref_position_explicit=.TRUE.)
+         ELSE
+            CALL planar_averaged_v_hartree_3d(v_hartree_rspace, dft_control, &
+                                              qs_env%scf_control%gce%do_gce, &
+                                              qs_env%scf_control%gce%ref_esp, para_env)
+         END IF
       END IF
 
       ! In case decouple periodic images and/or apply restraints to charges
@@ -500,10 +516,37 @@ CONTAINS
       END IF
       CALL auxbas_pw_pool%give_back_pw(v_hartree_gspace)
 
+      ref_esp_correction = 0.0_dp
       IF (dft_control%correct_surf_dip) THEN
          IF (dft_control%surf_dip_correct_switch) THEN
-            CALL calc_dipsurf_potential(qs_env, energy)
+            IF (dft_control%do_pcc) THEN
+               IF (dft_control%pcc_control%mode == pcc_mode_single) THEN
+                  IF (correct_gce_ref) THEN
+                     CALL calc_dipsurf_potential(qs_env, energy, rho_tot_gspace, &
+                                                 ref_position=qs_env%scf_control%gce%ref_position, &
+                                                 ref_position_explicit= &
+                                                 qs_env%scf_control%gce%ref_position_explicit, &
+                                                 ref_esp_correction=ref_esp_correction)
+                  ELSE
+                     CALL calc_dipsurf_potential(qs_env, energy, rho_tot_gspace)
+                  END IF
+               ELSE
+                  IF (correct_gce_ref) THEN
+                     CALL calc_dipsurf_potential(qs_env, energy, &
+                                                 ref_position=qs_env%scf_control%gce%ref_position, &
+                                                 ref_position_explicit= &
+                                                 qs_env%scf_control%gce%ref_position_explicit, &
+                                                 ref_esp_correction=ref_esp_correction)
+                  ELSE
+                     CALL calc_dipsurf_potential(qs_env, energy)
+                  END IF
+               END IF
+            ELSE
+               CALL calc_dipsurf_potential(qs_env, energy)
+            END IF
             energy%hartree = energy%hartree + energy%surf_dipole
+            IF (correct_gce_ref) &
+               qs_env%scf_control%gce%ref_esp = qs_env%scf_control%gce%ref_esp + ref_esp_correction
          END IF
       END IF
 
