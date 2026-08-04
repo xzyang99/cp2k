@@ -956,6 +956,35 @@ CONTAINS
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "nle_v_hartree_cube", &
+                                       description="Controls the printing of the complete nonlinear-electrolyte"// &
+                                       " electrostatic potential: the electrons, ions, and planar counter charge,"// &
+                                       " plus the nonlinear-electrolyte response and its G=0 reference shift."// &
+                                       " It requires SCCS METHOD NONLINEAR_ELECTROLYTE and is valid only for QS"// &
+                                       " with GPW formalism. Note that by convention the potential has opposite"// &
+                                       " sign than the expected physical one.", &
+                                       print_level=high_print_level, filename="")
+      CALL keyword_create(keyword, __LOCATION__, name="stride", &
+                          description="The stride (X,Y,Z) used to write the cube file "// &
+                          "(larger values result in smaller cube files). You can provide 3 numbers (for X,Y,Z) or"// &
+                          " 1 number valid for all components.", &
+                          usage="STRIDE 2 2 2", n_var=-1, default_i_vals=[2, 2, 2], type_of_var=integer_t)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="APPEND", &
+                          description="append the cube files when they already exist", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="MAX_FILE_SIZE_MB", &
+                          description="Limits the size of the cube file by choosing a suitable stride. Zero means no limit.", &
+                          usage="MAX_FILE_SIZE_MB 1.5", default_r_val=0.0_dp)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+
+      CALL section_add_subsection(section, print_key)
+      CALL section_release(print_key)
+
       CALL cp_print_key_section_create(print_key, __LOCATION__, "external_potential_cube", &
                                        description="Controls the printing of a cube file with external"// &
                                        " potential from the DFT%EXTERNAL_POTENTIAL section only.", &
@@ -2452,10 +2481,75 @@ CONTAINS
       CALL section_add_subsection(print_key, sub_print_key)
       CALL section_release(sub_print_key)
 
+      CALL add_sccs_cube_print_key(print_key, "NLE_DENSITY_SHAPE", &
+                                   "the nonlinear electrolyte base density cavity shape")
+      CALL add_sccs_cube_print_key(print_key, "NLE_SOLVENT_FUNCTION", &
+                                   "the nonlinear electrolyte solvent accessibility function")
+      CALL add_sccs_cube_print_key(print_key, "NLE_ION_ACCESS_FUNCTION", &
+                                   "the nonlinear electrolyte ion accessibility function")
+      CALL add_sccs_cube_print_key(print_key, "NLE_SHAPE_POTENTIAL", &
+                                   "the nonlinear electrolyte cavity shape-derivative potential")
+      CALL add_sccs_cube_print_key(print_key, "NLE_DIELECTRIC_SHAPE", &
+                                   "the nonlinear electrolyte dielectric accessibility function")
+      CALL add_sccs_cube_print_key(print_key, "NLE_CAVITY_FUNCTION", &
+                                   "the nonlinear electrolyte cavitation accessibility function")
+      CALL add_sccs_cube_print_key(print_key, "NLE_EFFECTIVE_DIELECTRIC_SHAPE", &
+                                   "the effective nonlinear electrolyte dielectric shape")
+      CALL add_sccs_cube_print_key(print_key, "NLE_BOUND_CHARGE_DENSITY", &
+                                   "the nonlinear dielectric bound charge density")
+      CALL add_sccs_cube_print_key(print_key, "NLE_ION_CHARGE_DENSITY", &
+                                   "the nonlinear electrolyte mobile ionic charge density")
+
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
    END SUBROUTINE create_print_dft_section
+
+! **************************************************************************************************
+!> \brief Add a cube print key for a nonlinear electrolyte field
+!> \param section SCCS print section
+!> \param key_name print key name
+!> \param field_description description of the field written to the cube
+! **************************************************************************************************
+   SUBROUTINE add_sccs_cube_print_key(section, key_name, field_description)
+
+      TYPE(section_type), POINTER                        :: section
+      CHARACTER(LEN=*), INTENT(IN)                      :: key_name, field_description
+
+      TYPE(keyword_type), POINTER                        :: keyword
+      TYPE(section_type), POINTER                        :: print_key
+
+      NULLIFY (keyword, print_key)
+
+      CALL cp_print_key_section_create( &
+         print_key, __LOCATION__, name=key_name, &
+         description="Controls the printing of "//field_description//".", &
+         print_level=debug_print_level, &
+         filename="", &
+         each_iter_names=s2a("QS_SCF"), &
+         each_iter_values=[0], &
+         citations=[Fattebert2002, Andreussi2012, Yin2017])
+      CALL keyword_create(keyword, __LOCATION__, name="STRIDE", &
+                          description="The stride (X,Y,Z) used to write the cube file "// &
+                          "(larger values result in smaller cube files). You can provide 3 "// &
+                          "numbers (for X,Y,Z) or 1 number valid for all components.", &
+                          n_var=-1, &
+                          default_i_vals=[2, 2, 2], &
+                          type_of_var=integer_t, &
+                          repeats=.FALSE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="APPEND", &
+                          description="Append the cube files when they already exist", &
+                          default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE., &
+                          repeats=.FALSE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+      CALL section_add_subsection(section, print_key)
+      CALL section_release(print_key)
+
+   END SUBROUTINE add_sccs_cube_print_key
 
 ! **************************************************************************************************
 !> \brief ...

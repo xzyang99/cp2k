@@ -46,10 +46,10 @@ MODULE input_cp2k_dft
         rtp_bse_ham_g0w0, rtp_bse_ham_ks, rtp_bse_kernel_ri_ao, rtp_bse_kernel_ri_default, &
         rtp_bse_kernel_ri_rs, rtp_method_bse, rtp_method_tddft, sccs_andreussi, &
         sccs_derivative_cd3, sccs_derivative_cd5, sccs_derivative_cd7, sccs_derivative_fft, &
-        sccs_fattebert_gygi, sccs_saa_andreussi, sic_ad, sic_eo, sic_list_all, sic_list_unpaired, &
-        sic_mauri_spz, sic_mauri_us, sic_none, slater, use_mom_ref_coac, use_mom_ref_com, &
-        use_mom_ref_user, use_mom_ref_zero, use_restart_wfn, use_rt_restart, use_scf_wfn, &
-        weight_type_mass, weight_type_unit
+        sccs_fattebert_gygi, sccs_nonlinear_electrolyte, sccs_saa_andreussi, sic_ad, sic_eo, &
+        sic_list_all, sic_list_unpaired, sic_mauri_spz, sic_mauri_us, sic_none, slater, &
+        use_mom_ref_coac, use_mom_ref_com, use_mom_ref_user, use_mom_ref_zero, use_restart_wfn, &
+        use_rt_restart, use_scf_wfn, weight_type_mass, weight_type_unit
    USE input_cp2k_almo,                 ONLY: create_almo_scf_section
    USE input_cp2k_as,                   ONLY: create_active_space_section
    USE input_cp2k_ec,                   ONLY: create_ec_section
@@ -2365,7 +2365,7 @@ CONTAINS
                           description="Define the parameters for self-consistent continuum solvation (SCCS) model", &
                           citations=[Fattebert2002, Andreussi2012, Yin2017], &
                           n_keywords=8, &
-                          n_subsections=3, &
+                          n_subsections=4, &
                           repeats=.FALSE.)
 
       NULLIFY (keyword)
@@ -2503,11 +2503,14 @@ CONTAINS
                           description="Method used for the smoothing of the dielectric function", &
                           usage="METHOD Fattebert-Gygi", &
                           default_i_val=sccs_andreussi, &
-                          enum_c_vals=s2a("ANDREUSSI", "FATTEBERT-GYGI", "SAA_ANDREUSSI"), &
-                          enum_i_vals=[sccs_andreussi, sccs_fattebert_gygi, sccs_saa_andreussi], &
+                          enum_c_vals=s2a("ANDREUSSI", "FATTEBERT-GYGI", "SAA_ANDREUSSI", &
+                                          "NONLINEAR_ELECTROLYTE"), &
+                          enum_i_vals=[sccs_andreussi, sccs_fattebert_gygi, sccs_saa_andreussi, &
+                                       sccs_nonlinear_electrolyte], &
                           enum_desc=s2a("Smoothing function proposed by Andreussi et al.", &
                                         "Smoothing function proposed by Fattebert and Gygi", &
-                                        "Smoothing function of the solvent aware algorithm"))
+                                        "Smoothing function of the solvent aware algorithm", &
+                                        "Nonlocal nonlinear dielectric and electrolyte model"))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -2681,6 +2684,199 @@ CONTAINS
                           unit_str='bohr', &
                           default_r_val=2.6_dp, &
                           usage="R_SOLV 2.6")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
+      CALL section_create(subsection, __LOCATION__, &
+                          name="NONLINEAR_ELECTROLYTE", &
+                          description="Parameters for the nonlocal nonlinear dielectric and electrolyte model", &
+                          n_keywords=17, &
+                          n_subsections=0, &
+                          repeats=.FALSE.)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="NC_K", &
+                          description="Critical density used by the nonlinear electrolyte cavity shape function", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=0.015_dp, unit_str="angstrom^-3"), &
+                          unit_str="angstrom^-3")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="SIGMA_K", &
+                          variants=["SIGMA"], &
+                          description="Log-density width of the nonlinear electrolyte cavity shape function", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=0.6_dp)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="A_K", &
+                          description="Cavity smoothing length used to scale the nonlocal exclusion radii", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=0.125_dp, unit_str="angstrom"), &
+                          unit_str="angstrom")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="TAU", &
+                          description="Cavitation surface tension used by the nonlinear electrolyte model", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=8.79E-4_dp, unit_str="eV*angstrom^-2"), &
+                          unit_str="eV*angstrom^-2")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="R_SOLV", &
+                          description="Solvent exclusion radius", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=1.40_dp, unit_str="angstrom"), &
+                          unit_str="angstrom")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="R_DIEL", &
+                          description="Dielectric response exclusion radius", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=1.00_dp, unit_str="angstrom"), &
+                          unit_str="angstrom")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="R_ION", &
+                          description="Ion response exclusion radius", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=0.0_dp, unit_str="angstrom"), &
+                          unit_str="angstrom")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="R_CAV", &
+                          description="Cavitation exclusion radius", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=0.0_dp, unit_str="angstrom"), &
+                          unit_str="angstrom")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="R_B", &
+                          description="Born response radius used by the nonlinear electrolyte model", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=0.0_dp, unit_str="angstrom"), &
+                          unit_str="angstrom")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="C_MOLAR", &
+                          description="Bulk salt concentration in mol/l for the symmetric electrolyte", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=0.0_dp)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="ZION", &
+                          description="Absolute ion valence of the symmetric electrolyte", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=1.0_dp)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="D_ION", &
+                          description="Ion packing diameter used in the lattice-gas saturation denominator", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=-1.0_dp, unit_str="angstrom"), &
+                          unit_str="angstrom")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="SOLTEMP", &
+                          description="Solution temperature", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=298.0_dp, unit_str="K"), &
+                          unit_str="K")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="EB_K", &
+                          description="Static bulk relative permittivity of the solvent", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=78.4_dp)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="EPSILON_INF", &
+                          description="Optical relative permittivity used by the nonlinear dielectric model", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=1.78_dp)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="N_MOL", &
+                          description="Bulk molecular number density of the solvent", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=0.0335_dp, unit_str="angstrom^-3"), &
+                          unit_str="angstrom^-3")
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="P_MOL", &
+                          description="Solvent molecular dipole moment in electron-Angstrom units", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=0.50_dp, unit_str="angstrom"), &
+                          unit_str="angstrom")
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
 

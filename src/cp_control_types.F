@@ -561,10 +561,14 @@ MODULE cp_control_types
 ! **************************************************************************************************
    TYPE sccs_control_type
       LOGICAL                              :: sccs_activated = .FALSE., &
-                                              saa_activated = .FALSE.
+                                              saa_activated = .FALSE., &
+                                              nle_force_strict = .FALSE., &
+                                              nle_scf_strict = .FALSE.
       INTEGER                              :: derivative_method = 0, &
                                               max_iter = 0, &
-                                              method_id = 0
+                                              method_id = 0, &
+                                              nle_scf_last_iter = -1, &
+                                              nle_scf_near_count = 0
       REAL(KIND=dp)                        :: alpha_solvent = 0.0_dp, &
                                               beta = 0.0_dp, &
                                               beta_solvent = 0.0_dp, &
@@ -581,7 +585,25 @@ MODULE cp_control_types
                                               delta_eta = 0.0_dp, &
                                               alpha_zeta = 0.0_dp, &
                                               delta_zeta = 0.0_dp, &
-                                              R_solv = 0.0_dp
+                                              R_solv = 0.0_dp, &
+                                              nle_a_k = 0.0_dp, &
+                                              nle_c_molar = 0.0_dp, &
+                                              nle_d_ion = 0.0_dp, &
+                                              nle_eb_k = 0.0_dp, &
+                                              nle_epsilon_inf = 0.0_dp, &
+                                              nle_n_mol = 0.0_dp, &
+                                              nle_nc_k = 0.0_dp, &
+                                              nle_p_mol = 0.0_dp, &
+                                              nle_phi_shift = 0.0_dp, &
+                                              nle_r_b = 0.0_dp, &
+                                              nle_r_cav = 0.0_dp, &
+                                              nle_r_diel = 0.0_dp, &
+                                              nle_r_ion = 0.0_dp, &
+                                              nle_r_solv = 0.0_dp, &
+                                              nle_sigma_k = 0.0_dp, &
+                                              nle_soltemp = 0.0_dp, &
+                                              nle_tau = 0.0_dp, &
+                                              nle_zion = 0.0_dp
    END TYPE sccs_control_type
 
 ! **************************************************************************************************

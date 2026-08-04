@@ -59,14 +59,15 @@ MODULE cp_control_utils
         gaussian_env, gfn1xtb, gfn_tblite, kg_tnadd_embed, kg_tnadd_embed_ri, no_admm_type, &
         numerical, ramp_env, real_time_propagation, rtp_method_bse, rtp_method_bse_linearized, &
         sccs_andreussi, sccs_derivative_cd3, sccs_derivative_cd5, sccs_derivative_cd7, &
-        sccs_derivative_fft, sccs_fattebert_gygi, sccs_saa_andreussi, sic_ad, sic_eo, &
-        sic_list_all, sic_list_unpaired, sic_mauri_spz, sic_mauri_us, sic_none, slater, &
-        tblite_cli_born_kernel_auto, tblite_cli_solution_state_gsolv, tblite_cli_solvation_alpb, &
-        tblite_cli_solvation_cpcm, tblite_cli_solvation_gb, tblite_cli_solvation_gbe, &
-        tblite_cli_solvation_gbsa, tblite_guess_ceh, tblite_mixer_memory_inherit, &
-        tblite_scc_mixer_auto, tblite_scc_mixer_cp2k, tblite_scc_mixer_none, &
-        tblite_scc_mixer_tblite, tblite_solver_gvd, tblite_solver_gvr, tddfpt_dipole_length, &
-        tddfpt_kernel_stda, use_mom_ref_user, xtb_vdw_type_d3, xtb_vdw_type_d4, xtb_vdw_type_none
+        sccs_derivative_fft, sccs_fattebert_gygi, sccs_nonlinear_electrolyte, sccs_saa_andreussi, &
+        sic_ad, sic_eo, sic_list_all, sic_list_unpaired, sic_mauri_spz, sic_mauri_us, sic_none, &
+        slater, tblite_cli_born_kernel_auto, tblite_cli_solution_state_gsolv, &
+        tblite_cli_solvation_alpb, tblite_cli_solvation_cpcm, tblite_cli_solvation_gb, &
+        tblite_cli_solvation_gbe, tblite_cli_solvation_gbsa, tblite_guess_ceh, &
+        tblite_mixer_memory_inherit, tblite_scc_mixer_auto, tblite_scc_mixer_cp2k, &
+        tblite_scc_mixer_none, tblite_scc_mixer_tblite, tblite_solver_gvd, tblite_solver_gvr, &
+        tddfpt_dipole_length, tddfpt_kernel_stda, use_mom_ref_user, xtb_vdw_type_d3, &
+        xtb_vdw_type_d4, xtb_vdw_type_none
    USE input_cp2k_check,                ONLY: xc_functionals_expand
    USE input_cp2k_dft,                  ONLY: create_dft_section
    USE input_enumeration_types,         ONLY: enum_i2c,&
@@ -805,6 +806,83 @@ CONTAINS
                                          r_val=dft_control%sccs_control%alpha_zeta)
                CALL cite_reference(Andreussi2019)
                CALL cite_reference(Chai2025a)
+            CASE (sccs_nonlinear_electrolyte)
+               tmp_section => section_vals_get_subs_vals(sccs_section, "NONLINEAR_ELECTROLYTE")
+               CALL section_vals_get(tmp_section, explicit=is_present)
+               IF (.NOT. is_present) THEN
+                  CALL cp_abort(__LOCATION__, &
+                                "SCCS method NONLINEAR_ELECTROLYTE requires the "// &
+                                "NONLINEAR_ELECTROLYTE section.")
+               END IF
+               IF (.NOT. ALL(cell%perd == 1)) THEN
+                  CALL cp_abort(__LOCATION__, &
+                                "SCCS method NONLINEAR_ELECTROLYTE is only implemented for "// &
+                                "3D periodic calculations.")
+               END IF
+               CALL section_vals_val_get(tmp_section, "NC_K", &
+                                         r_val=dft_control%sccs_control%nle_nc_k)
+               CALL section_vals_val_get(tmp_section, "SIGMA_K", &
+                                         r_val=dft_control%sccs_control%nle_sigma_k)
+               CALL section_vals_val_get(tmp_section, "A_K", &
+                                         r_val=dft_control%sccs_control%nle_a_k)
+               CALL section_vals_val_get(tmp_section, "TAU", &
+                                         r_val=dft_control%sccs_control%nle_tau)
+               CALL section_vals_val_get(tmp_section, "R_SOLV", &
+                                         r_val=dft_control%sccs_control%nle_r_solv)
+               CALL section_vals_val_get(tmp_section, "R_DIEL", &
+                                         r_val=dft_control%sccs_control%nle_r_diel)
+               CALL section_vals_val_get(tmp_section, "R_ION", &
+                                         r_val=dft_control%sccs_control%nle_r_ion)
+               CALL section_vals_val_get(tmp_section, "R_CAV", &
+                                         r_val=dft_control%sccs_control%nle_r_cav)
+               CALL section_vals_val_get(tmp_section, "R_B", &
+                                         r_val=dft_control%sccs_control%nle_r_b)
+               CALL section_vals_val_get(tmp_section, "C_MOLAR", &
+                                         r_val=dft_control%sccs_control%nle_c_molar)
+               CALL section_vals_val_get(tmp_section, "ZION", &
+                                         r_val=dft_control%sccs_control%nle_zion)
+               CALL section_vals_val_get(tmp_section, "D_ION", &
+                                         r_val=dft_control%sccs_control%nle_d_ion)
+               CALL section_vals_val_get(tmp_section, "SOLTEMP", &
+                                         r_val=dft_control%sccs_control%nle_soltemp)
+               CALL section_vals_val_get(tmp_section, "EB_K", &
+                                         r_val=dft_control%sccs_control%nle_eb_k)
+               CALL section_vals_val_get(tmp_section, "EPSILON_INF", &
+                                         r_val=dft_control%sccs_control%nle_epsilon_inf)
+               CALL section_vals_val_get(tmp_section, "N_MOL", &
+                                         r_val=dft_control%sccs_control%nle_n_mol)
+               CALL section_vals_val_get(tmp_section, "P_MOL", &
+                                         r_val=dft_control%sccs_control%nle_p_mol)
+               IF (dft_control%sccs_control%nle_nc_k <= 0.0_dp) THEN
+                  CALL cp_abort(__LOCATION__, &
+                                "The SCCS nonlinear electrolyte parameter NC_K must be positive.")
+               END IF
+               IF (dft_control%sccs_control%nle_sigma_k <= 0.0_dp) THEN
+                  CALL cp_abort(__LOCATION__, &
+                                "The SCCS nonlinear electrolyte parameter SIGMA_K must be positive.")
+               END IF
+               IF (dft_control%sccs_control%nle_a_k <= 0.0_dp) THEN
+                  CALL cp_abort(__LOCATION__, &
+                                "The SCCS nonlinear electrolyte parameter A_K must be positive.")
+               END IF
+               IF (dft_control%sccs_control%nle_c_molar < 0.0_dp) THEN
+                  CALL cp_abort(__LOCATION__, &
+                                "The SCCS nonlinear electrolyte parameter C_MOLAR must not be negative.")
+               END IF
+               IF (dft_control%sccs_control%nle_zion <= 0.0_dp) THEN
+                  CALL cp_abort(__LOCATION__, &
+                                "The SCCS nonlinear electrolyte parameter ZION must be positive.")
+               END IF
+               IF (dft_control%sccs_control%nle_soltemp <= 0.0_dp) THEN
+                  CALL cp_abort(__LOCATION__, &
+                                "The SCCS nonlinear electrolyte parameter SOLTEMP must be positive.")
+               END IF
+               IF (dft_control%sccs_control%nle_eb_k < 1.0_dp) THEN
+                  CALL cp_abort(__LOCATION__, &
+                                "The SCCS nonlinear electrolyte parameter EB_K must be at least 1.")
+               END IF
+               dft_control%sccs_control%epsilon_solvent = dft_control%sccs_control%nle_eb_k
+               dft_control%sccs_control%gamma_solvent = dft_control%sccs_control%nle_tau
             CASE DEFAULT
                CPABORT("Invalid SCCS model specified. Please, check your input!")
             END SELECT
@@ -2641,6 +2719,15 @@ CONTAINS
                   "SCCS|  alpha_zeta", dft_control%sccs_control%alpha_zeta, &
                   "SCCS|  delta_zeta", dft_control%sccs_control%delta_zeta, &
                   "SCCS|  R_solv", dft_control%sccs_control%R_solv
+            CASE (sccs_nonlinear_electrolyte)
+               WRITE (UNIT=output_unit, FMT="(T2,A,/,(T2,A,T61,ES20.6))") &
+                  "SCCS| Nonlocal nonlinear dielectric and electrolyte model", &
+                  "SCCS|  NC_K", dft_control%sccs_control%nle_nc_k, &
+                  "SCCS|  SIGMA_K", dft_control%sccs_control%nle_sigma_k, &
+                  "SCCS|  A_K", dft_control%sccs_control%nle_a_k, &
+                  "SCCS|  C_MOLAR [mol/l]", dft_control%sccs_control%nle_c_molar, &
+                  "SCCS|  ZION", dft_control%sccs_control%nle_zion, &
+                  "SCCS|  R_ION", dft_control%sccs_control%nle_r_ion
             CASE DEFAULT
                CPABORT("Invalid SCCS model specified. Please, check your input!")
             END SELECT

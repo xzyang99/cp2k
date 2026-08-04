@@ -261,7 +261,7 @@ CONTAINS
       CASE (pcc_mode_single)
          normal_length = dz*REAL(pcc_density_r%pw_grid%npts(c), dp)
          IF (pcc_env%plane_position < 0.0_dp .OR. pcc_env%plane_position >= normal_length) &
-            CPABORT("PLANAR_COUNTER_CHARGE%PLANE_POSITION must lie within the cell along the surface normal.")
+            CPABORT("PLANAR_COUNTER_CHARGE%PLANE_POSITION must lie within the cell.")
          lcenter = pcc_density_r%pw_grid%bounds(1, c) + INT(pcc_env%plane_position/dz)
 !$OMP    PARALLEL DO DEFAULT(NONE) &
 !$OMP                PRIVATE(delta,x,y,z,val) &

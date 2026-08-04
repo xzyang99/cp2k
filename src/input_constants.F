@@ -1234,7 +1234,8 @@ MODULE input_constants
    ! Self-consistent continuum solvation (SCCS) models
    INTEGER, PARAMETER, PUBLIC               :: sccs_andreussi = 0, &
                                                sccs_fattebert_gygi = 1, &
-                                               sccs_saa_andreussi = 2
+                                               sccs_saa_andreussi = 2, &
+                                               sccs_nonlinear_electrolyte = 3
 
    ! Derivative method used by the SCCS
    INTEGER, PARAMETER, PUBLIC               :: sccs_derivative_fft = 0, &

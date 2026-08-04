@@ -82,7 +82,7 @@ MODULE qs_scf_post_gpw
    USE input_constants,                 ONLY: &
         do_loc_both, do_loc_homo, do_loc_jacobi, do_loc_lumo, do_loc_mixed, do_loc_none, &
         moments_format_trajectory, ot_precond_full_all, radius_covalent, radius_user, &
-        ref_charge_atomic, ref_charge_mulliken
+        ref_charge_atomic, ref_charge_mulliken, sccs_nonlinear_electrolyte
    USE input_section_types,             ONLY: section_get_ival,&
                                               section_get_ivals,&
                                               section_get_lval,&
@@ -737,6 +737,19 @@ CONTAINS
       CALL qs_subsys_get(subsys, particles=particles)
 
       CALL qs_rho_get(rho, rho_ao_kp=rho_ao)
+
+      ! Ordinary electronic steps perform only one nonlinear-electrolyte update.
+      ! Rebuild once from the final electronic density and converge the electrolyte
+      ! independently of any print key.
+      IF (dft_control%do_sccs) THEN
+         IF (dft_control%sccs_control%method_id == sccs_nonlinear_electrolyte) THEN
+            dft_control%sccs_control%nle_force_strict = .TRUE.
+            CALL qs_ks_did_change(qs_env%ks_env, rho_changed=.TRUE.)
+            CALL qs_ks_update_qs_env(qs_env, calculate_forces=.FALSE., &
+                                     just_energy=.FALSE.)
+            dft_control%sccs_control%nle_force_strict = .FALSE.
+         END IF
+      END IF
 
       IF (my_do_mp2) THEN
          ! Get the HF+MP2 density
@@ -2607,10 +2620,10 @@ CONTAINS
                                                             print_key_voro, xc_section
 
       CALL timeset(routineN, handle)
-      NULLIFY (cell, dft_control, pw_env, auxbas_pw_pool, pw_pools, hfx_section, &
-               atomic_kind_set, qs_kind_set, particle_set, rho, ks_rmpv, rho_ao, rho_r, &
-               dft_section, xc_section, input, particles, subsys, matrix_vxc, v_hartree_rspace, &
-               vee)
+      NULLIFY (cell, dft_control, pw_env, auxbas_pw_pool, pw_pools, &
+               hfx_section, atomic_kind_set, qs_kind_set, particle_set, rho, &
+               ks_rmpv, rho_ao, rho_r, dft_section, xc_section, input, &
+               particles, subsys, matrix_vxc, v_hartree_rspace, vee)
 
       logger => cp_get_default_logger()
       output_unit = cp_logger_get_default_io_unit(logger)
@@ -3227,6 +3240,47 @@ CONTAINS
                             mpi_io=mpi_io)
          CALL cp_print_key_finished_output(unit_nr, logger, input, &
                                            "DFT%PRINT%V_HARTREE_CUBE", mpi_io=mpi_io)
+
+         CALL auxbas_pw_pool%give_back_pw(aux_r)
+      END IF
+
+      ! Print the complete nonlinear-electrolyte electrostatic potential
+      IF (BTEST(cp_print_key_should_output(logger%iter_info, input, &
+                                           "DFT%PRINT%NLE_V_HARTREE_CUBE"), cp_p_file)) THEN
+         IF ((.NOT. dft_control%do_sccs) .OR. &
+             (dft_control%sccs_control%method_id /= sccs_nonlinear_electrolyte)) THEN
+            CPABORT("NLE_V_HARTREE_CUBE requires SCCS METHOD NONLINEAR_ELECTROLYTE.")
+         END IF
+
+         CALL get_qs_env(qs_env=qs_env, &
+                         pw_env=pw_env, &
+                         v_hartree_rspace=v_hartree_rspace)
+         CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
+         CALL auxbas_pw_pool%create_pw(aux_r)
+
+         append_cube = section_get_lval(input, "DFT%PRINT%NLE_V_HARTREE_CUBE%APPEND")
+         my_pos_cube = "REWIND"
+         IF (append_cube) my_pos_cube = "APPEND"
+         mpi_io = .TRUE.
+         unit_nr = cp_print_key_unit_nr(logger, input, "DFT%PRINT%NLE_V_HARTREE_CUBE", &
+                                        extension=".cube", middle_name="nle_v_hartree", &
+                                        file_position=my_pos_cube, mpi_io=mpi_io)
+         udvol = 1.0_dp/v_hartree_rspace%pw_grid%dvol
+
+         CALL pw_copy(v_hartree_rspace, aux_r)
+         CALL pw_scale(aux_r, udvol)
+
+         aux_r%array = aux_r%array + dft_control%sccs_control%nle_phi_shift
+
+         CALL cp_pw_to_cube( &
+            aux_r, unit_nr, "TOTAL NONLINEAR-ELECTROLYTE ELECTROSTATIC POTENTIAL", &
+            particles=particles, zeff=zcharge, &
+            stride=section_get_ivals(dft_section, "PRINT%NLE_V_HARTREE_CUBE%STRIDE"), &
+            max_file_size_mb=section_get_rval(dft_section, &
+                                              "PRINT%NLE_V_HARTREE_CUBE%MAX_FILE_SIZE_MB"), &
+            mpi_io=mpi_io)
+         CALL cp_print_key_finished_output(unit_nr, logger, input, &
+                                           "DFT%PRINT%NLE_V_HARTREE_CUBE", mpi_io=mpi_io)
 
          CALL auxbas_pw_pool%give_back_pw(aux_r)
       END IF
