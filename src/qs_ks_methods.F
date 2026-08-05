@@ -64,6 +64,7 @@ MODULE qs_ks_methods
    USE input_constants,                 ONLY: do_ppl_grid,&
                                               outer_scf_becke_constraint,&
                                               outer_scf_hirshfeld_constraint,&
+                                              sccs_nonlinear_electrolyte,&
                                               smeagol_runtype_emtransport
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
@@ -220,8 +221,8 @@ CONTAINS
          native_gapw_atom_composite_reference, native_gapw_atom_composite_requested, &
          native_gapw_composite_direct_ao, native_gapw_composite_reference, &
          native_grid_diagnostics, native_grid_use_cuda, native_skala_evaluator, &
-         native_skala_restore_exc, paw_composite_representation, rigpw, use_gauxc_matrix, &
-         use_virial
+         native_skala_restore_exc, nle_dipole_coupled, nle_dipole_feedback, &
+         paw_composite_representation, rigpw, use_gauxc_matrix, use_virial
       LOGICAL, SAVE :: native_grid_cpu_kpoints_warned = .FALSE.
       REAL(KIND=dp) :: ecore_ppl, edisp, ee_ener, ekin_mol, mulliken_order_p, &
          native_skala_composite_contraction, native_skala_composite_rho_contraction, &
@@ -259,6 +260,7 @@ CONTAINS
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_poisson_type), POINTER                     :: poisson_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
+      TYPE(pw_r3d_rs_type)                               :: nle_vdip_rspace
       TYPE(pw_r3d_rs_type), DIMENSION(2)                 :: v_hxc_rspace
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_r, v_rspace_embed, v_rspace_new, &
                                                             v_rspace_new_aux_fit, v_tau_rspace, &
@@ -339,6 +341,17 @@ CONTAINS
 
       nimages = dft_control%nimages
       nspins = dft_control%nspins
+      nle_dipole_coupled = .FALSE.
+      nle_dipole_feedback = .FALSE.
+      IF (dft_control%do_sccs) THEN
+         nle_dipole_coupled = &
+            dft_control%sccs_control%method_id == sccs_nonlinear_electrolyte .AND. &
+            dft_control%correct_surf_dip .AND. dft_control%surf_dip_correct_switch .AND. &
+            dft_control%dir_surf_dip == 3 .AND. &
+            (.NOT. dft_control%do_pcc)
+         nle_dipole_feedback = nle_dipole_coupled .AND. &
+                               dft_control%sccs_control%nle_dipole_feedback_ready
+      END IF
 
       ! remap pointer to allow for non-kpoint external ks matrix
       IF (PRESENT(ext_ks_matrix)) ks_matrix(1:nspins, 1:1) => ext_ks_matrix(1:nspins)
@@ -442,6 +455,16 @@ CONTAINS
          CALL planar_counter_charge(rho_tot_gspace, dft_control%pcc_control, auxbas_pw_pool)
       END IF
 
+      ! Match the reference coupling order: the current solute density and the
+      ! previous nonlinear response generate the dipole potential used by this NLE solve.
+      IF (nle_dipole_feedback) THEN
+         CALL auxbas_pw_pool%create_pw(nle_vdip_rspace)
+         CALL calc_dipsurf_potential(qs_env, energy, rho_tot_gspace, &
+                                     response_charge=dft_control%sccs_control%nle_response_charge, &
+                                     response_dipole_z=dft_control%sccs_control%nle_response_dipole_z, &
+                                     vdip_potential=nle_vdip_rspace, add_to_hartree=.FALSE.)
+      END IF
+
       IF (my_print) THEN
          CALL print_densities(qs_env, rho)
       END IF
@@ -457,12 +480,22 @@ CONTAINS
          END IF
 
          IF (use_virial .AND. calculate_forces) THEN
-            CALL sccs(qs_env, rho_tot_gspace, v_hartree_gspace, v_sccs_rspace, &
-                      h_stress=h_stress)
+            IF (nle_dipole_feedback) THEN
+               CALL sccs(qs_env, rho_tot_gspace, v_hartree_gspace, v_sccs_rspace, &
+                         h_stress=h_stress, external_potential=nle_vdip_rspace)
+            ELSE
+               CALL sccs(qs_env, rho_tot_gspace, v_hartree_gspace, v_sccs_rspace, &
+                         h_stress=h_stress)
+            END IF
             virial%pv_ehartree = virial%pv_ehartree + h_stress/REAL(para_env%num_pe, dp)
             virial%pv_virial = virial%pv_virial + h_stress/REAL(para_env%num_pe, dp)
          ELSE
-            CALL sccs(qs_env, rho_tot_gspace, v_hartree_gspace, v_sccs_rspace)
+            IF (nle_dipole_feedback) THEN
+               CALL sccs(qs_env, rho_tot_gspace, v_hartree_gspace, v_sccs_rspace, &
+                         external_potential=nle_vdip_rspace)
+            ELSE
+               CALL sccs(qs_env, rho_tot_gspace, v_hartree_gspace, v_sccs_rspace)
+            END IF
          END IF
       ELSE
          ! Getting the Hartree energy and Hartree potential.  Also getting the stress tensor
@@ -519,7 +552,15 @@ CONTAINS
       ref_esp_correction = 0.0_dp
       IF (dft_control%correct_surf_dip) THEN
          IF (dft_control%surf_dip_correct_switch) THEN
-            IF (dft_control%do_pcc) THEN
+            IF (nle_dipole_feedback) THEN
+               IF (.NOT. just_energy) &
+                  CALL pw_axpy(nle_vdip_rspace, v_hartree_rspace, &
+                               alpha=v_hartree_rspace%pw_grid%dvol)
+            ELSE IF (nle_dipole_coupled) THEN
+               ! Delay the correction until an NLE response is available.  From
+               ! the next call onward NLE and KS use the same lagged dipole potential.
+               energy%surf_dipole = 0.0_dp
+            ELSE IF (dft_control%do_pcc) THEN
                IF (dft_control%pcc_control%mode == pcc_mode_single) THEN
                   IF (correct_gce_ref) THEN
                      CALL calc_dipsurf_potential(qs_env, energy, rho_tot_gspace, &
@@ -549,6 +590,7 @@ CONTAINS
                qs_env%scf_control%gce%ref_esp = qs_env%scf_control%gce%ref_esp + ref_esp_correction
          END IF
       END IF
+      IF (nle_dipole_feedback) CALL auxbas_pw_pool%give_back_pw(nle_vdip_rspace)
 
       ! SIC
       CALL calc_v_sic_rspace(v_sic_rspace, energy, qs_env, dft_control, rho, poisson_env, &

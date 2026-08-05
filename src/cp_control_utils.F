@@ -128,17 +128,19 @@ CONTAINS
       CHARACTER(LEN=default_string_length), &
          DIMENSION(:), POINTER                           :: tmpstringlist
       INTEGER                                            :: admmtype, irep, isize, kg_tnadd_method, &
-                                                            method_id, nrep, xc_deriv_method_id
+                                                            method_id, nle_region_direction, nrep, &
+                                                            xc_deriv_method_id
       LOGICAL :: at_end, dist_edge_explicit, do_hfx, do_ot, do_rpa_admm, do_rtp, exopt1, exopt2, &
-         exopt3, explicit, is_present, l_param, local_moment_possible, native_skala_grid, not_SE, &
-         plane_position_explicit, was_present
+         exopt3, explicit, is_present, l_param, local_moment_possible, native_skala_grid, &
+         nle_region_lower_explicit, nle_region_upper_explicit, not_SE, plane_position_explicit, &
+         was_present
       REAL(KIND=dp)                                      :: density_cut, gradient_cut, tau_cut
       REAL(KIND=dp), DIMENSION(:), POINTER               :: pol
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_parser_type)                               :: parser
       TYPE(section_vals_type), POINTER :: hairy_probes_section, hfx_section, kg_xc_fun_section, &
-         kg_xc_section, maxwell_section, sccs_section, scf_section, tmp_section, xc_fun_section, &
-         xc_gauxc_subsection, xc_section
+         kg_xc_section, maxwell_section, nle_region_section, sccs_section, scf_section, &
+         tmp_section, xc_fun_section, xc_gauxc_subsection, xc_section
 
       was_present = .FALSE.
 
@@ -853,6 +855,52 @@ CONTAINS
                                          r_val=dft_control%sccs_control%nle_n_mol)
                CALL section_vals_val_get(tmp_section, "P_MOL", &
                                          r_val=dft_control%sccs_control%nle_p_mol)
+               nle_region_section => section_vals_get_subs_vals(tmp_section, "SOLVENT_REGION")
+               CALL section_vals_val_get(nle_region_section, "_SECTION_PARAMETERS_", &
+                                         l_val=dft_control%sccs_control%nle_region_activated)
+               IF (dft_control%sccs_control%nle_region_activated) THEN
+                  CALL section_vals_val_get(nle_region_section, "DIRECTION", &
+                                            i_val=nle_region_direction)
+                  CALL section_vals_val_get(nle_region_section, "LOWER_BOUND", &
+                                            explicit=nle_region_lower_explicit, &
+                                            r_val=dft_control%sccs_control%nle_region_lower)
+                  CALL section_vals_val_get(nle_region_section, "UPPER_BOUND", &
+                                            explicit=nle_region_upper_explicit, &
+                                            r_val=dft_control%sccs_control%nle_region_upper)
+                  CALL section_vals_val_get(nle_region_section, "SMOOTH_WIDTH", &
+                                            r_val=dft_control%sccs_control%nle_region_smooth_width)
+                  CALL section_vals_val_get(nle_region_section, "ION_BUFFER", &
+                                            r_val=dft_control%sccs_control%nle_region_ion_buffer)
+                  IF (nle_region_direction /= 3) THEN
+                     CALL cp_abort(__LOCATION__, &
+                                   "The SCCS nonlinear electrolyte solvent region supports only DIRECTION Z.")
+                  END IF
+                  IF (.NOT. nle_region_lower_explicit .OR. .NOT. nle_region_upper_explicit) THEN
+                     CALL cp_abort(__LOCATION__, &
+                                   "The SCCS nonlinear electrolyte solvent region requires LOWER_BOUND and UPPER_BOUND.")
+                  END IF
+                  IF (dft_control%sccs_control%nle_region_lower < 0.0_dp .OR. &
+                      dft_control%sccs_control%nle_region_upper <= &
+                      dft_control%sccs_control%nle_region_lower) THEN
+                     CALL cp_abort(__LOCATION__, &
+                                   "The SCCS nonlinear electrolyte solvent-region bounds must satisfy "// &
+                                   "0 <= LOWER_BOUND < UPPER_BOUND.")
+                  END IF
+                  IF (dft_control%sccs_control%nle_region_smooth_width <= 0.0_dp) THEN
+                     CALL cp_abort(__LOCATION__, &
+                                   "The SCCS nonlinear electrolyte solvent-region SMOOTH_WIDTH must be positive.")
+                  END IF
+                  IF (dft_control%sccs_control%nle_region_ion_buffer < 0.0_dp) THEN
+                     CALL cp_abort(__LOCATION__, &
+                                   "The SCCS nonlinear electrolyte solvent-region ION_BUFFER must not be negative.")
+                  END IF
+                  IF (dft_control%sccs_control%nle_region_upper - &
+                      dft_control%sccs_control%nle_region_lower <= &
+                      2.0_dp*dft_control%sccs_control%nle_region_ion_buffer) THEN
+                     CALL cp_abort(__LOCATION__, &
+                                   "The SCCS nonlinear electrolyte solvent region must be wider than twice ION_BUFFER.")
+                  END IF
+               END IF
                IF (dft_control%sccs_control%nle_nc_k <= 0.0_dp) THEN
                   CALL cp_abort(__LOCATION__, &
                                 "The SCCS nonlinear electrolyte parameter NC_K must be positive.")
@@ -936,6 +984,16 @@ CONTAINS
             CASE DEFAULT
                CPABORT("Invalid PLANAR_COUNTER_CHARGE mode.")
             END SELECT
+         END IF
+      END IF
+
+      IF (dft_control%do_sccs) THEN
+         IF (dft_control%sccs_control%method_id == sccs_nonlinear_electrolyte .AND. &
+             dft_control%correct_surf_dip .AND. (.NOT. dft_control%do_pcc) .AND. &
+             dft_control%dir_surf_dip /= 3) THEN
+            CALL cp_abort(__LOCATION__, &
+                          "SCCS METHOD NONLINEAR_ELECTROLYTE without PLANAR_COUNTER_CHARGE supports "// &
+                          "surface dipole coupling only with SURF_DIP_DIR Z.")
          END IF
       END IF
 
@@ -2728,6 +2786,18 @@ CONTAINS
                   "SCCS|  C_MOLAR [mol/l]", dft_control%sccs_control%nle_c_molar, &
                   "SCCS|  ZION", dft_control%sccs_control%nle_zion, &
                   "SCCS|  R_ION", dft_control%sccs_control%nle_r_ion
+               IF (dft_control%sccs_control%nle_region_activated) THEN
+                  WRITE (UNIT=output_unit, FMT="(T2,A,/,(T2,A,T61,ES20.6))") &
+                     "SCCS|  Solvent region along Cartesian z", &
+                     "SCCS|   LOWER_BOUND [angstrom]", &
+                     cp_unit_from_cp2k(dft_control%sccs_control%nle_region_lower, "angstrom"), &
+                     "SCCS|   UPPER_BOUND [angstrom]", &
+                     cp_unit_from_cp2k(dft_control%sccs_control%nle_region_upper, "angstrom"), &
+                     "SCCS|   SMOOTH_WIDTH [angstrom]", &
+                     cp_unit_from_cp2k(dft_control%sccs_control%nle_region_smooth_width, "angstrom"), &
+                     "SCCS|   ION_BUFFER [angstrom]", &
+                     cp_unit_from_cp2k(dft_control%sccs_control%nle_region_ion_buffer, "angstrom")
+               END IF
             CASE DEFAULT
                CPABORT("Invalid SCCS model specified. Please, check your input!")
             END SELECT

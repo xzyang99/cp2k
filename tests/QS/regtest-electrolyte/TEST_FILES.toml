@@ -1,2 +1,3 @@
 # runs are executed in the same order as in this file
 "BN_slab_nle.inp" = [{matcher="E_total", tol=1.0E-10, ref=-12.643847606955923}]
+"BN_slab_nle_region.inp" = [{matcher="E_total", tol=1.0E-10, ref=-12.643611072988621}]

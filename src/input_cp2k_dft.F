@@ -2356,7 +2356,7 @@ CONTAINS
       TYPE(section_type), POINTER                        :: section
 
       TYPE(keyword_type), POINTER                        :: keyword
-      TYPE(section_type), POINTER                        :: subsection
+      TYPE(section_type), POINTER                        :: region_section, subsection
 
       CPASSERT(.NOT. ASSOCIATED(section))
 
@@ -2526,7 +2526,7 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      NULLIFY (subsection)
+      NULLIFY (region_section, subsection)
 
       CALL section_create(subsection, __LOCATION__, &
                           name="ANDREUSSI", &
@@ -2694,7 +2694,7 @@ CONTAINS
                           name="NONLINEAR_ELECTROLYTE", &
                           description="Parameters for the nonlocal nonlinear dielectric and electrolyte model", &
                           n_keywords=17, &
-                          n_subsections=0, &
+                          n_subsections=1, &
                           repeats=.FALSE.)
 
       CALL keyword_create(keyword, __LOCATION__, &
@@ -2879,6 +2879,75 @@ CONTAINS
                           unit_str="angstrom")
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
+
+      CALL section_create(region_section, __LOCATION__, &
+                          name="SOLVENT_REGION", &
+                          description="Restricts the nonlinear electrolyte model to a smooth interval along z", &
+                          n_keywords=6, &
+                          n_subsections=0, &
+                          repeats=.FALSE.)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="_SECTION_PARAMETERS_", &
+                          description="Activates the user-defined nonlinear electrolyte region", &
+                          usage="&SOLVENT_REGION ON", &
+                          default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(region_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="DIRECTION", &
+                          description="Cartesian direction normal to the solvent-region boundaries", &
+                          enum_c_vals=s2a("Z"), &
+                          enum_i_vals=[3], &
+                          enum_desc=s2a("Cartesian z direction"), &
+                          n_var=1, &
+                          default_i_val=3, &
+                          usage="DIRECTION Z")
+      CALL section_add_keyword(region_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="LOWER_BOUND", &
+                          description="Lower Cartesian boundary of the implicit-solvent interval", &
+                          usage="LOWER_BOUND 8.0", &
+                          unit_str="angstrom", &
+                          type_of_var=real_t)
+      CALL section_add_keyword(region_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="UPPER_BOUND", &
+                          description="Upper Cartesian boundary of the implicit-solvent interval", &
+                          usage="UPPER_BOUND 28.0", &
+                          unit_str="angstrom", &
+                          type_of_var=real_t)
+      CALL section_add_keyword(region_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="SMOOTH_WIDTH", &
+                          description="Gaussian width of the smooth solvent-region boundaries", &
+                          usage="SMOOTH_WIDTH 0.8", &
+                          unit_str="angstrom", &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=0.8_dp, unit_str="angstrom"))
+      CALL section_add_keyword(region_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="ION_BUFFER", &
+                          description="Distance by which the ion and cavity interval is inset from each boundary", &
+                          usage="ION_BUFFER 2.0", &
+                          unit_str="angstrom", &
+                          type_of_var=real_t, &
+                          default_r_val=cp_unit_to_cp2k(value=2.0_dp, unit_str="angstrom"))
+      CALL section_add_keyword(region_section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL section_add_subsection(subsection, region_section)
+      CALL section_release(region_section)
 
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)

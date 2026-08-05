@@ -18,6 +18,7 @@ MODULE surface_dipole
                                               pw_env_type
    USE pw_grid_types,                   ONLY: PW_MODE_LOCAL
    USE pw_methods,                      ONLY: pw_axpy,&
+                                              pw_copy,&
                                               pw_integral_ab,&
                                               pw_scale,&
                                               pw_transfer,&
@@ -52,6 +53,10 @@ CONTAINS
 !> \param ref_position optional GCE reference position
 !> \param ref_position_explicit whether the GCE reference position was explicitly set
 !> \param ref_esp_correction dipole-potential correction at the GCE reference position
+!> \param response_charge optional cached response charge
+!> \param response_dipole_z optional cached absolute response dipole along z
+!> \param vdip_potential optional unscaled dipole-correction potential
+!> \param add_to_hartree whether to add the correction to the stored Hartree potential
 !> \par History
 !>      01.2014 created [MI]
 !> \author MI
@@ -59,7 +64,9 @@ CONTAINS
 ! **************************************************************************************************
 
    SUBROUTINE calc_dipsurf_potential(qs_env, energy, rho_tot_gspace, ref_position, &
-                                     ref_position_explicit, ref_esp_correction)
+                                     ref_position_explicit, ref_esp_correction, &
+                                     response_charge, response_dipole_z, &
+                                     vdip_potential, add_to_hartree)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_energy_type), POINTER                      :: energy
@@ -67,6 +74,9 @@ CONTAINS
       REAL(KIND=dp), INTENT(IN), OPTIONAL                :: ref_position
       LOGICAL, INTENT(IN), OPTIONAL                      :: ref_position_explicit
       REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: ref_esp_correction
+      REAL(KIND=dp), INTENT(IN), OPTIONAL                :: response_charge, response_dipole_z
+      TYPE(pw_r3d_rs_type), INTENT(INOUT), OPTIONAL      :: vdip_potential
+      LOGICAL, INTENT(IN), OPTIONAL                      :: add_to_hartree
 
       CHARACTER(len=*), PARAMETER :: routineN = 'calc_dipsurf_potential'
 
@@ -75,8 +85,9 @@ CONTAINS
                                                             jsurf, width
       INTEGER, DIMENSION(3)                              :: ngrid
       INTEGER, DIMENSION(:, :), POINTER                  :: bo
+      LOGICAL                                            :: apply_potential
       REAL(dp) :: cutoff, dh(3, 3), dip_fac, dip_hh, dsurf, height_min, hh, normal_length, &
-         pos_surf_dip, rhoav_min, surfarea, vdip, vdip_fac
+         pos_surf_dip, response_dipole_relative, response_vint, rhoav_min, surfarea, vdip, vdip_fac
       REAL(dp), ALLOCATABLE, DIMENSION(:)                :: rhoavsurf
       TYPE(cell_type), POINTER                           :: cell
       TYPE(dft_control_type), POINTER                    :: dft_control
@@ -110,6 +121,10 @@ CONTAINS
       CALL auxbas_pw_pool%create_pw(wf_r)
       CALL auxbas_pw_pool%create_pw(vdip_r)
 
+      apply_potential = .TRUE.
+      IF (PRESENT(add_to_hartree)) apply_potential = add_to_hartree
+      CPASSERT(PRESENT(response_charge) .EQV. PRESENT(response_dipole_z))
+
       IF (PRESENT(rho_tot_gspace)) THEN
          CALL pw_transfer(rho_tot_gspace, wf_r)
       ELSE
@@ -141,7 +156,6 @@ CONTAINS
             CALL pw_axpy(rho_r(ispin), wf_r)
          END DO
       END IF
-
       ngrid(1:3) = wf_r%pw_grid%npts(1:3)
       idir_surfdip = dft_control%dir_surf_dip
 
@@ -255,6 +269,13 @@ CONTAINS
          dip_hh = dip_hh + rhoavsurf(irho)*hh*dip_fac*cutoff
       END DO
 
+      response_dipole_relative = 0.0_dp
+      IF (PRESENT(response_charge)) THEN
+         CPASSERT(idir_surfdip == 3)
+         response_dipole_relative = response_dipole_z - response_charge*height_min
+         dip_hh = dip_hh + response_dipole_relative
+      END IF
+
       DEALLOCATE (rhoavsurf)
 ! for printing purposes [SGh]
       qs_env%surface_dipole_moment = dip_hh/bohr
@@ -312,9 +333,20 @@ CONTAINS
 
 !    Dipole correction contribution to the energy
       energy%surf_dipole = 0.5_dp*pw_integral_ab(vdip_r, wf_r, just_sum=.TRUE.)
+      IF (PRESENT(response_charge)) THEN
+         normal_length = cell%hmat(idir_surfdip, idir_surfdip)
+         response_vint = vdip_fac/surfarea* &
+                         (-0.5_dp*response_charge + response_dipole_relative/normal_length)
+         energy%surf_dipole = energy%surf_dipole + 0.5_dp*response_vint
+      END IF
+
+      IF (PRESENT(vdip_potential)) THEN
+         CALL pw_copy(vdip_r, vdip_potential)
+         CALL pw_scale(vdip_potential, 1.0_dp/vdip_r%pw_grid%dvol)
+      END IF
 
 !    Add the dipole potential to the hartree potential on the realspace grid
-      CALL pw_axpy(vdip_r, v_hartree_rspace)
+      IF (apply_potential) CALL pw_axpy(vdip_r, v_hartree_rspace)
 
       CALL auxbas_pw_pool%give_back_pw(wf_r)
       CALL auxbas_pw_pool%give_back_pw(vdip_r)

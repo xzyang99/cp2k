@@ -562,7 +562,9 @@ MODULE cp_control_types
    TYPE sccs_control_type
       LOGICAL                              :: sccs_activated = .FALSE., &
                                               saa_activated = .FALSE., &
+                                              nle_dipole_feedback_ready = .FALSE., &
                                               nle_force_strict = .FALSE., &
+                                              nle_region_activated = .FALSE., &
                                               nle_scf_strict = .FALSE.
       INTEGER                              :: derivative_method = 0, &
                                               max_iter = 0, &
@@ -595,6 +597,12 @@ MODULE cp_control_types
                                               nle_nc_k = 0.0_dp, &
                                               nle_p_mol = 0.0_dp, &
                                               nle_phi_shift = 0.0_dp, &
+                                              nle_response_charge = 0.0_dp, &
+                                              nle_response_dipole_z = 0.0_dp, &
+                                              nle_region_ion_buffer = 0.0_dp, &
+                                              nle_region_lower = 0.0_dp, &
+                                              nle_region_smooth_width = 0.0_dp, &
+                                              nle_region_upper = 0.0_dp, &
                                               nle_r_b = 0.0_dp, &
                                               nle_r_cav = 0.0_dp, &
                                               nle_r_diel = 0.0_dp, &

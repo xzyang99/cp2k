@@ -72,8 +72,8 @@ MODULE qs_sccs
    USE pw_env_types,                    ONLY: pw_env_get,&
                                               pw_env_type
    USE pw_methods,                      ONLY: &
-        pw_axpy, pw_copy, pw_derive, pw_integral_ab, pw_integrate_function, pw_laplace, pw_scale, &
-        pw_transfer, pw_zero
+        pw_axpy, pw_copy, pw_derive, pw_integral_ab, pw_integrate_function, pw_laplace, &
+        pw_multiply_with, pw_scale, pw_transfer, pw_zero
    USE pw_poisson_methods,              ONLY: pw_func_u_convolution,&
                                               pw_poisson_solve
    USE pw_poisson_types,                ONLY: pw_poisson_analytic,&
@@ -124,19 +124,21 @@ CONTAINS
 !> \param v_hartree_gspace ...
 !> \param v_sccs ...
 !> \param h_stress ...
+!> \param external_potential optional external electrostatic potential used by NLE
 !> \par History:
 !>      - Creation (10.10.2013,MK)
 !> \author  Matthias Krack (MK)
 !> \version 1.0
 ! **************************************************************************************************
 
-   SUBROUTINE sccs(qs_env, rho_tot_gspace, v_hartree_gspace, v_sccs, h_stress)
+   SUBROUTINE sccs(qs_env, rho_tot_gspace, v_hartree_gspace, v_sccs, h_stress, external_potential)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(pw_c1d_gs_type), INTENT(INOUT)                :: rho_tot_gspace, v_hartree_gspace
       TYPE(pw_r3d_rs_type), INTENT(INOUT)                :: v_sccs
       REAL(KIND=dp), DIMENSION(3, 3), INTENT(OUT), &
          OPTIONAL                                        :: h_stress
+      TYPE(pw_r3d_rs_type), INTENT(IN), OPTIONAL         :: external_potential
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'sccs'
       REAL(KIND=dp), PARAMETER                           :: epstol = 1.0E-8_dp
@@ -149,14 +151,15 @@ CONTAINS
       INTEGER(KIND=int_8)                                :: ngpts
       INTEGER, DIMENSION(3)                              :: cell_periodic, lb, ub
       LOGICAL :: append_cube, calculate_stress_tensor, do_kpoints, do_nle, mpi_io, nle_converged, &
-         nle_strict_solve, should_output
+         nle_dipole_coupled, nle_dipole_seed, nle_strict_solve, should_output
       REAL(KIND=dp) :: alpha_zeta, beta_phi, cavity_surface, cavity_volume, cell_volume, &
          charge_correction, delta_eta, delta_zeta, dphi2, dvol, e_nle_diel, e_nle_field, &
          e_nle_ion, e_nle_shift, e_tot, electrolyte_charge, eps_sccs_current, epsilon_solvent, f, &
          f0, ion_access_volume, ion_bulk_density, ion_capacity, ion_charge_target, ion_denom, &
          ion_diameter, ion_free_density, ion_packing, ion_phi_shift, kT, nle_residual_rms, &
-         polarisation_charge, r, R_solv, response_charge, rho_delta, rho_delta_avg, rho_delta_max, &
-         rho_iter_new, solute_charge, tot_rho_elec, tot_rho_solute, zeff
+         nle_response_charge_new, nle_response_dipole_new, polarisation_charge, r, R_solv, &
+         response_charge, rho_delta, rho_delta_avg, rho_delta_max, rho_iter_new, solute_charge
+      REAL(KIND=dp) :: tot_rho_elec, tot_rho_solute, zeff
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: zcharge
       REAL(KIND=dp), DIMENSION(3)                        :: abc, lxyz, uxyz
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
@@ -174,9 +177,10 @@ CONTAINS
       TYPE(pw_pool_p_type), DIMENSION(:), POINTER        :: pw_pools
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_r3d_rs_type) :: d_s_rhoel, deps_elec, dtf, eps_elec, ff, nle_lambda_cav, &
-         nle_lambda_diel, nle_lambda_ion, nle_rho_bound, nle_rho_ion, nle_scav, nle_sdiel, &
-         nle_sdiel_eff, nle_sion, nle_ssolv, nle_svdw, nle_xcav, nle_xdiel, nle_xion, nle_xsolv, &
-         nle_xvdw, p_e_interface, s, t, tem_convolution, tem_func, u
+         nle_lambda_diel, nle_lambda_ion, nle_region_ion, nle_region_solvent, nle_rho_bound, &
+         nle_rho_ion, nle_scav, nle_sdiel, nle_sdiel_eff, nle_sion, nle_ssolv, nle_svdw, nle_xcav, &
+         nle_xdiel, nle_xion, nle_xsolv, nle_xvdw, p_e_interface, s, t, tem_convolution, tem_func, &
+         u
       TYPE(pw_r3d_rs_type), DIMENSION(3)                 :: dln_eps_elec, dphi_tot, nle_eloc
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_pw_r
       TYPE(pw_r3d_rs_type), POINTER                      :: rho_pw_r_sccs
@@ -229,6 +233,11 @@ CONTAINS
 
       sccs_control => dft_control%sccs_control
       do_nle = (sccs_control%method_id == sccs_nonlinear_electrolyte)
+      nle_dipole_coupled = do_nle .AND. dft_control%correct_surf_dip .AND. &
+                           dft_control%surf_dip_correct_switch .AND. &
+                           (dft_control%dir_surf_dip == 3) .AND. (.NOT. dft_control%do_pcc)
+      nle_dipole_seed = nle_dipole_coupled .AND. &
+                        (.NOT. sccs_control%nle_dipole_feedback_ready)
       IF (do_nle) CALL get_cell(cell=cell, periodic=cell_periodic)
 
       ALLOCATE (zcharge(natom))
@@ -389,6 +398,12 @@ CONTAINS
             CALL auxbas_pw_pool%create_pw(nle_lambda_cav)
             CALL auxbas_pw_pool%create_pw(nle_rho_bound)
             CALL auxbas_pw_pool%create_pw(nle_rho_ion)
+            IF (sccs_control%nle_region_activated) THEN
+               CALL auxbas_pw_pool%create_pw(nle_region_solvent)
+               CALL auxbas_pw_pool%create_pw(nle_region_ion)
+               CALL sccs_nle_build_region_masks(nle_region_solvent, nle_region_ion, &
+                                                sccs_control, lb, ub)
+            END IF
             CALL auxbas_pw_pool%create_pw(nle_kernel_b)
             CALL auxbas_pw_pool%create_pw(nle_kernel_cav)
             CALL auxbas_pw_pool%create_pw(nle_kernel_diel)
@@ -418,11 +433,20 @@ CONTAINS
             IF (sccs_control%nle_r_solv > 0.0_dp) &
                CALL sccs_nle_prepare_exp_kernel(nle_kernel_solv, sccs_control%nle_r_solv, &
                                                 sccs_control, auxbas_pw_pool)
-            CALL sccs_nle_build_shapes(rho_elec, eps_elec, deps_elec, nle_svdw, nle_ssolv, &
-                                       nle_sion, nle_sdiel, nle_sdiel_eff, nle_scav, nle_xvdw, &
-                                       nle_xsolv, nle_xion, nle_xdiel, nle_xcav, &
-                                       nle_kernel_solv, nle_kernel_ion, nle_kernel_diel, &
-                                       nle_kernel_cav, sccs_control, auxbas_pw_pool, lb, ub)
+            IF (sccs_control%nle_region_activated) THEN
+               CALL sccs_nle_build_shapes(rho_elec, eps_elec, deps_elec, nle_svdw, nle_ssolv, &
+                                          nle_sion, nle_sdiel, nle_sdiel_eff, nle_scav, nle_xvdw, &
+                                          nle_xsolv, nle_xion, nle_xdiel, nle_xcav, &
+                                          nle_kernel_solv, nle_kernel_ion, nle_kernel_diel, &
+                                          nle_kernel_cav, sccs_control, auxbas_pw_pool, lb, ub, &
+                                          nle_region_solvent, nle_region_ion)
+            ELSE
+               CALL sccs_nle_build_shapes(rho_elec, eps_elec, deps_elec, nle_svdw, nle_ssolv, &
+                                          nle_sion, nle_sdiel, nle_sdiel_eff, nle_scav, nle_xvdw, &
+                                          nle_xsolv, nle_xion, nle_xdiel, nle_xcav, &
+                                          nle_kernel_solv, nle_kernel_ion, nle_kernel_diel, &
+                                          nle_kernel_cav, sccs_control, auxbas_pw_pool, lb, ub)
+            END IF
          ELSE
             SELECT CASE (sccs_control%method_id)
             CASE (sccs_andreussi)
@@ -909,17 +933,50 @@ CONTAINS
                END IF
             END IF
 
-            nle_strict_solve = sccs_control%nle_force_strict .OR. sccs_control%nle_scf_strict
+            nle_strict_solve = sccs_control%nle_force_strict .OR. &
+                               sccs_control%nle_scf_strict .OR. nle_dipole_seed
             nle_max_outer = sccs_control%max_iter
             IF (.NOT. nle_strict_solve) nle_max_outer = 1
-            CALL sccs_nle_newton_solve(rho_solute, rho_pw_r_sccs, rho_tot, phi_tot, &
-                                       nle_rho_bound, nle_rho_ion, nle_lambda_diel, nle_lambda_ion, &
-                                       nle_eloc, nle_sdiel, nle_sion, nle_kernel_b, &
-                                       sccs_control, poisson_env, auxbas_pw_pool, ion_bulk_density, &
-                                       ion_packing, kT, solute_charge, cell_volume, eps_sccs_current, &
-                                       nle_max_outer, output_unit,.NOT. nle_strict_solve, &
-                                       ion_phi_shift, iter, nle_pcg_iterations, &
-                                       nle_residual_rms, nle_converged)
+            IF (PRESENT(external_potential)) THEN
+               CALL sccs_nle_newton_solve(rho_solute, rho_pw_r_sccs, rho_tot, phi_tot, &
+                                          nle_rho_bound, nle_rho_ion, nle_lambda_diel, nle_lambda_ion, &
+                                          nle_eloc, nle_sdiel, nle_sion, nle_kernel_b, &
+                                          sccs_control, poisson_env, auxbas_pw_pool, ion_bulk_density, &
+                                          ion_packing, kT, solute_charge, cell_volume, eps_sccs_current, &
+                                          nle_max_outer, output_unit,.NOT. nle_strict_solve, &
+                                          ion_phi_shift, iter, nle_pcg_iterations, &
+                                          nle_residual_rms, nle_converged, external_potential)
+            ELSE
+               CALL sccs_nle_newton_solve(rho_solute, rho_pw_r_sccs, rho_tot, phi_tot, &
+                                          nle_rho_bound, nle_rho_ion, nle_lambda_diel, nle_lambda_ion, &
+                                          nle_eloc, nle_sdiel, nle_sion, nle_kernel_b, &
+                                          sccs_control, poisson_env, auxbas_pw_pool, ion_bulk_density, &
+                                          ion_packing, kT, solute_charge, cell_volume, eps_sccs_current, &
+                                          nle_max_outer, output_unit,.NOT. nle_strict_solve, &
+                                          ion_phi_shift, iter, nle_pcg_iterations, &
+                                          nle_residual_rms, nle_converged)
+            END IF
+            ! Seed the feedback from a converged response.  During the fast SCF
+            ! phase, mix the moment from each single Newton update on the same
+            ! scale as the SCCS response density.
+            IF (nle_dipole_coupled .AND. &
+                ((nle_dipole_seed .AND. nle_converged) .OR. (.NOT. nle_dipole_seed))) THEN
+               CALL sccs_nle_response_moments(rho_pw_r_sccs, para_env, &
+                                              nle_response_charge_new, &
+                                              nle_response_dipole_new)
+               IF (nle_dipole_seed) THEN
+                  sccs_control%nle_response_charge = nle_response_charge_new
+                  sccs_control%nle_response_dipole_z = nle_response_dipole_new
+               ELSE
+                  sccs_control%nle_response_charge = &
+                     (1.0_dp - sccs_control%mixing)*sccs_control%nle_response_charge + &
+                     sccs_control%mixing*nle_response_charge_new
+                  sccs_control%nle_response_dipole_z = &
+                     (1.0_dp - sccs_control%mixing)*sccs_control%nle_response_dipole_z + &
+                     sccs_control%mixing*nle_response_dipole_new
+               END IF
+               sccs_control%nle_dipole_feedback_ready = .TRUE.
+            END IF
             IF (should_output .AND. (output_unit > 0) .AND. (print_level > low_print_level)) THEN
                WRITE (UNIT=output_unit, FMT="(T3,A,I0,A,I0,A,ES12.4)") &
                   "SCCS| Electrolyte Newton solver used ", iter, " updates and ", &
@@ -1160,6 +1217,9 @@ CONTAINS
                                   dvhartree=dphi_tot)
          END IF
          CALL pw_transfer(v_hartree_gspace, phi_tot)
+         energy%sccs_hartree = 0.5_dp*pw_integral_ab(rho_solute, phi_tot)
+         IF (do_nle .AND. PRESENT(external_potential)) &
+            CALL pw_axpy(external_potential, phi_tot)
          IF (do_nle) CALL derive(phi_tot, dphi_tot, sccs_derivative_fft, pw_env, input)
 
          ! The SCCS loop evaluates the nonlinear response before mixing it into
@@ -1179,8 +1239,6 @@ CONTAINS
                                                 ion_charge_target, ion_phi_shift, auxbas_pw_pool, lb, ub)
             END IF
          END IF
-         energy%sccs_hartree = 0.5_dp*pw_integral_ab(rho_solute, phi_tot)
-
          ! nonlinear electrolyte evaluates the ionic grand-potential density at the total
          ! electrostatic potential, including its charge-neutrality shift.
          IF (do_nle .AND. (ion_bulk_density > 0.0_dp)) THEN
@@ -1218,6 +1276,8 @@ CONTAINS
                                   density=rho_solute, &
                                   ehartree=energy%hartree, &
                                   vhartree=phi_solute)
+            IF (do_nle .AND. PRESENT(external_potential)) &
+               CALL pw_axpy(external_potential, phi_solute)
 
             ! Calculate the polarisation potential (store it in phi_tot)
             ! phi_pol = phi_tot - phi_solute
@@ -1352,6 +1412,8 @@ CONTAINS
          IF (do_nle) THEN
             WRITE (UNIT=output_unit, FMT="(T3,A,T56,F25.12)") &
                "SCCS| Ionic response charge", electrolyte_charge, &
+               "SCCS| NLE response charge [e]", sccs_control%nle_response_charge, &
+               "SCCS| NLE response z dipole [e*bohr]", sccs_control%nle_response_dipole_z, &
                "SCCS| NLE G=0 potential shift [Hartree]", sccs_control%nle_phi_shift
             WRITE (UNIT=output_unit, FMT="(T3,A,T56,F25.12)") &
                "SCCS| NLE G=0 energy [Hartree]", e_nle_shift, &
@@ -1438,6 +1500,10 @@ CONTAINS
          CALL auxbas_pw_pool%give_back_pw(nle_lambda_cav)
          CALL auxbas_pw_pool%give_back_pw(nle_rho_bound)
          CALL auxbas_pw_pool%give_back_pw(nle_rho_ion)
+         IF (sccs_control%nle_region_activated) THEN
+            CALL auxbas_pw_pool%give_back_pw(nle_region_solvent)
+            CALL auxbas_pw_pool%give_back_pw(nle_region_ion)
+         END IF
          CALL auxbas_pw_pool%give_back_pw(nle_kernel_b)
          CALL auxbas_pw_pool%give_back_pw(nle_kernel_cav)
          CALL auxbas_pw_pool%give_back_pw(nle_kernel_diel)
@@ -1526,7 +1592,7 @@ CONTAINS
                                     sccs_control, poisson_env, pw_pool, ion_bulk_density, &
                                     ion_packing, kT, solute_charge, cell_volume, tolerance, &
                                     max_outer, output_unit, adaptive_tolerance, phi_shift, nouter, npcgtot, &
-                                    residual_rms, converged)
+                                    residual_rms, converged, external_potential)
 
       TYPE(pw_r3d_rs_type), INTENT(IN)                   :: rho_solute
       TYPE(pw_r3d_rs_type), INTENT(INOUT)                :: rho_response, rho_tot, phi, rho_bound, &
@@ -1545,6 +1611,7 @@ CONTAINS
       INTEGER, INTENT(OUT)                               :: nouter, npcgtot
       REAL(KIND=dp), INTENT(OUT)                         :: residual_rms
       LOGICAL, INTENT(OUT)                               :: converged
+      TYPE(pw_r3d_rs_type), INTENT(IN), OPTIONAL         :: external_potential
 
       INTEGER                                            :: i, ipcgit, j, k, line_iter
       INTEGER, DIMENSION(3)                              :: lb, ub
@@ -1589,6 +1656,10 @@ CONTAINS
       CALL pw_axpy(rho_response, rho_tot)
       CALL sccs_nle_apply_preconditioner(rho_tot, phi, poisson_env, pw_pool)
       CALL sccs_nle_apply_preconditioner(rho_solute, phi_solute, poisson_env, pw_pool)
+      IF (PRESENT(external_potential)) THEN
+         CALL pw_axpy(external_potential, phi)
+         CALL pw_axpy(external_potential, phi_solute)
+      END IF
       CALL sccs_nle_evaluate(phi, rho_bound, rho_ion, lambda_diel, lambda_ion, eloc, &
                              sdiel, sion, kernel_g, sccs_control, pw_pool, ion_bulk_density, &
                              ion_packing, kT, solute_charge, phi_shift, lb, ub)
@@ -2478,6 +2549,104 @@ CONTAINS
    END SUBROUTINE sccs_nle_fill_gaussian_kernel
 
 ! **************************************************************************************************
+!> \brief Cache the nonlinear response charge and absolute z dipole outside the electronic mixer.
+! **************************************************************************************************
+   SUBROUTINE sccs_nle_response_moments(rho_response, para_env, response_charge, response_dipole_z)
+
+      TYPE(pw_r3d_rs_type), INTENT(IN)                   :: rho_response
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      REAL(KIND=dp), INTENT(OUT)                         :: response_charge, response_dipole_z
+
+      INTEGER                                            :: i, j, k
+      INTEGER, DIMENSION(3)                              :: lb, ub
+      REAL(KIND=dp)                                      :: dvol, zpos
+
+      lb(:) = rho_response%pw_grid%bounds_local(1, :)
+      ub(:) = rho_response%pw_grid%bounds_local(2, :)
+      dvol = rho_response%pw_grid%dvol
+      response_charge = pw_integrate_function(rho_response)
+      response_dipole_z = 0.0_dp
+!$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(i,j,k,zpos) &
+!$OMP             SHARED(dvol,lb,rho_response,ub) REDUCTION(+:response_dipole_z)
+      DO k = lb(3), ub(3)
+         zpos = REAL(k, KIND=dp)*rho_response%pw_grid%dh(3, 3)
+         DO j = lb(2), ub(2)
+            DO i = lb(1), ub(1)
+               response_dipole_z = response_dipole_z + &
+                                   rho_response%array(i, j, k)*zpos*dvol
+            END DO
+         END DO
+      END DO
+!$OMP END PARALLEL DO
+      CALL para_env%sum(response_dipole_z)
+
+   END SUBROUTINE sccs_nle_response_moments
+
+! **************************************************************************************************
+!> \brief Build smooth masks that restrict the nonlinear electrolyte response along z.
+!> \param solvent_region ...
+!> \param ion_region ...
+!> \param sccs_control ...
+!> \param lb ...
+!> \param ub ...
+! **************************************************************************************************
+   SUBROUTINE sccs_nle_build_region_masks(solvent_region, ion_region, sccs_control, lb, ub)
+
+      TYPE(pw_r3d_rs_type), INTENT(INOUT)                :: solvent_region, ion_region
+      TYPE(sccs_control_type), POINTER                   :: sccs_control
+      INTEGER, DIMENSION(3), INTENT(IN)                  :: lb, ub
+
+      REAL(KIND=dp), PARAMETER :: inv_sqrt2 = 0.7071067811865475244_dp
+
+      INTEGER                                            :: i, j, k
+      REAL(KIND=dp)                                      :: ion_lower, ion_upper, mask_ion, &
+                                                            mask_solvent, normal_length, width, &
+                                                            zpos
+
+      IF (ABS(solvent_region%pw_grid%dh(3, 1)) > 1.0E-10_dp .OR. &
+          ABS(solvent_region%pw_grid%dh(3, 2)) > 1.0E-10_dp) THEN
+         CALL cp_abort(__LOCATION__, &
+                       "The SCCS nonlinear electrolyte solvent region requires lattice vectors A and B "// &
+                       "to lie in the Cartesian xy plane.")
+      END IF
+
+      normal_length = REAL(solvent_region%pw_grid%npts(3), KIND=dp)* &
+                      solvent_region%pw_grid%dh(3, 3)
+      IF (normal_length <= 0.0_dp) THEN
+         CPABORT("The SCCS nonlinear electrolyte solvent region requires a positive cell length along z.")
+      END IF
+      IF (sccs_control%nle_region_upper > normal_length) THEN
+         CPABORT("The SCCS nonlinear electrolyte solvent-region UPPER_BOUND lies outside the cell along z.")
+      END IF
+
+      width = inv_sqrt2*sccs_control%nle_region_smooth_width
+      ion_lower = sccs_control%nle_region_lower + sccs_control%nle_region_ion_buffer
+      ion_upper = sccs_control%nle_region_upper - sccs_control%nle_region_ion_buffer
+
+!$OMP PARALLEL DO DEFAULT(NONE) &
+!$OMP             PRIVATE(i,j,k,mask_ion,mask_solvent,zpos) &
+!$OMP             SHARED(ion_lower,ion_region,ion_upper,lb,sccs_control,solvent_region,ub,width)
+      DO k = lb(3), ub(3)
+         zpos = REAL(k, KIND=dp)*solvent_region%pw_grid%dh(3, 3)
+         mask_solvent = 0.5_dp* &
+                        (ERFC((zpos - sccs_control%nle_region_upper)/width) - &
+                         ERFC((zpos - sccs_control%nle_region_lower)/width))
+         mask_ion = 0.5_dp* &
+                    (ERFC((zpos - ion_upper)/width) - ERFC((zpos - ion_lower)/width))
+         mask_solvent = MIN(1.0_dp, MAX(0.0_dp, mask_solvent))
+         mask_ion = MIN(1.0_dp, MAX(0.0_dp, mask_ion))
+         DO j = lb(2), ub(2)
+            DO i = lb(1), ub(1)
+               solvent_region%array(i, j, k) = mask_solvent
+               ion_region%array(i, j, k) = mask_ion
+            END DO
+         END DO
+      END DO
+!$OMP END PARALLEL DO
+
+   END SUBROUTINE sccs_nle_build_region_masks
+
+! **************************************************************************************************
 !> \brief Build nonlinear electrolyte style cavity and electrolyte shape functions.
 !> \param rho_elec ...
 !> \param eps_elec ...
@@ -2497,11 +2666,13 @@ CONTAINS
 !> \param pw_pool ...
 !> \param lb ...
 !> \param ub ...
+!> \param solvent_region ...
+!> \param ion_region ...
 ! **************************************************************************************************
    SUBROUTINE sccs_nle_build_shapes(rho_elec, eps_elec, deps_elec, svdw, ssolv, sion, sdiel, &
                                     sdiel_eff, scav, xvdw, xsolv, xion, xdiel, xcav, &
                                     kernel_solv, kernel_ion, kernel_diel, kernel_cav, &
-                                    sccs_control, pw_pool, lb, ub)
+                                    sccs_control, pw_pool, lb, ub, solvent_region, ion_region)
 
       TYPE(pw_r3d_rs_type), INTENT(IN)                   :: rho_elec
       TYPE(pw_r3d_rs_type), INTENT(INOUT)                :: eps_elec, deps_elec, svdw, ssolv, sion, &
@@ -2512,6 +2683,7 @@ CONTAINS
       TYPE(sccs_control_type), POINTER                   :: sccs_control
       TYPE(pw_pool_type), POINTER                        :: pw_pool
       INTEGER, DIMENSION(3), INTENT(IN)                  :: lb, ub
+      TYPE(pw_r3d_rs_type), INTENT(IN), OPTIONAL         :: solvent_region, ion_region
 
       INTEGER                                            :: i, j, k
       REAL(KIND=dp)                                      :: rho_scaled, x
@@ -2550,6 +2722,7 @@ CONTAINS
          CALL pw_copy(ssolv, sion)
          CALL pw_copy(xvdw, xion)
       END IF
+      IF (PRESENT(ion_region)) CALL pw_multiply_with(sion, ion_region)
 
       IF (sccs_control%nle_r_solv > 0.0_dp) THEN
 !$OMP    PARALLEL DO DEFAULT(NONE) PRIVATE(i,j,k) SHARED(lb,ssolv,ub)
@@ -2566,6 +2739,7 @@ CONTAINS
       ELSE
          CALL pw_copy(xvdw, xsolv)
       END IF
+      IF (PRESENT(ion_region)) CALL pw_multiply_with(ssolv, ion_region)
 
       IF (sccs_control%nle_r_cav > 0.0_dp) THEN
          CALL pw_copy(ssolv, scav)
@@ -2584,6 +2758,7 @@ CONTAINS
          CALL pw_copy(ssolv, scav)
          CALL pw_copy(xsolv, xcav)
       END IF
+      IF (PRESENT(ion_region)) CALL pw_multiply_with(scav, ion_region)
 
       IF (sccs_control%nle_r_diel > 0.0_dp) THEN
          CALL pw_copy(ssolv, sdiel)
@@ -2602,6 +2777,7 @@ CONTAINS
          CALL pw_copy(ssolv, sdiel)
          CALL pw_copy(xsolv, xdiel)
       END IF
+      IF (PRESENT(solvent_region)) CALL pw_multiply_with(sdiel, solvent_region)
 
 !$OMP PARALLEL DO DEFAULT(NONE) PRIVATE(i,j,k) &
 !$OMP             SHARED(eps_elec,lb,sccs_control,sdiel,sdiel_eff,ub)
