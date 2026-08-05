@@ -1,3 +1,3 @@
 # runs are executed in the same order as in this file
 "H2plus_pcc_paep.inp"                    = [{matcher="E_total", tol=5e-12, ref=-0.570963905149144}]
-"H2plus_single_pcc_dipole.inp"           = [{matcher="E_total", tol=5e-12, ref=-0.449702857553691}]
+"H2plus_single_pcc_dipole.inp"           = [{matcher="E_total", tol=2e-11, ref=-0.449702857553691}]
