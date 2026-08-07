@@ -22,13 +22,14 @@ MODULE scf_control_types
                                               cp_print_key_unit_nr
    USE cp_units,                        ONLY: cp_unit_from_cp2k
    USE input_constants,                 ONLY: &
-        atomic_guess, diag_ot, direct_p_mix, general_roks, high_spin_roks, no_guess, no_mix, &
-        ot_algo_taylor_or_diag, outer_scf_basis_center_opt, outer_scf_cdft_constraint, &
-        outer_scf_ddapc_constraint, outer_scf_none, outer_scf_optimizer_bisect, &
-        outer_scf_optimizer_broyden, outer_scf_optimizer_diis, outer_scf_optimizer_newton, &
-        outer_scf_optimizer_newton_ls, outer_scf_optimizer_none, outer_scf_optimizer_sd, &
-        outer_scf_optimizer_secant, outer_scf_s2_constraint, smear_energy_window, &
-        smear_fermi_dirac, smear_gaussian, smear_list, smear_mp, smear_mv
+        atomic_guess, diag_ot, direct_p_mix, gce_method_direct, gce_method_langevin, &
+        gce_method_nhc, general_roks, high_spin_roks, no_guess, no_mix, ot_algo_taylor_or_diag, &
+        outer_scf_basis_center_opt, outer_scf_cdft_constraint, outer_scf_ddapc_constraint, &
+        outer_scf_none, outer_scf_optimizer_bisect, outer_scf_optimizer_broyden, &
+        outer_scf_optimizer_diis, outer_scf_optimizer_newton, outer_scf_optimizer_newton_ls, &
+        outer_scf_optimizer_none, outer_scf_optimizer_sd, outer_scf_optimizer_secant, &
+        outer_scf_s2_constraint, smear_energy_window, smear_fermi_dirac, smear_gaussian, &
+        smear_list, smear_mp, smear_mv
    USE input_cp2k_scf,                  ONLY: create_scf_section
    USE input_enumeration_types,         ONLY: enum_i2c,&
                                               enumeration_type
@@ -44,6 +45,9 @@ MODULE scf_control_types
    USE kinds,                           ONLY: dp
    USE outer_scf_control_types,         ONLY: outer_scf_control_type,&
                                               outer_scf_read_parameters
+   USE parallel_rng_types,              ONLY: GAUSSIAN,&
+                                              rng_stream_type
+   USE physcon,                         ONLY: evolt
    USE qs_cdft_opt_types,               ONLY: cdft_opt_type_release
    USE qs_ot_types,                     ONLY: ot_readwrite_input,&
                                               qs_ot_settings_init,&
@@ -150,12 +154,25 @@ MODULE scf_control_types
    TYPE gce_type
       LOGICAL                               :: do_gce = .FALSE., &
                                                ref_position_explicit = .FALSE.
+      INTEGER                               :: method = gce_method_direct, &
+                                               chain_length = 1, &
+                                               last_step = -1, &
+                                               random_counter = 0
       REAL(KIND=dp)                         :: target_workfunction = 0.16_dp, &
                                                ref_esp = 0.0_dp, &
                                                ref_position = 0.0_dp, &
                                                mixing_coef = 0.3_dp, &
                                                prev_workfunction = -1001.0_dp, &
-                                               nelec = 0.0_dp
+                                               nelec = -1.0_dp, &
+                                               electron_mass = 0.0_dp, &
+                                               temperature = 0.0_dp, &
+                                               timecon = 0.0_dp, &
+                                               langevin_gamma = 0.0_dp, &
+                                               electron_velocity = 0.0_dp, &
+                                               last_time = -1.0_dp, &
+                                               integration_dt = 0.0_dp
+      REAL(KIND=dp), ALLOCATABLE            :: nhc_velocities(:)
+      TYPE(rng_stream_type)                 :: rng
    END TYPE gce_type
 
 CONTAINS
@@ -309,6 +326,7 @@ CONTAINS
       END IF
 
       IF (ASSOCIATED(scf_control%gce)) THEN
+         IF (ALLOCATED(scf_control%gce%nhc_velocities)) DEALLOCATE (scf_control%gce%nhc_velocities)
          DEALLOCATE (scf_control%gce)
       END IF
 
@@ -572,12 +590,19 @@ CONTAINS
       CPASSERT(.NOT. ASSOCIATED(gce))
       ALLOCATE (gce)
       gce%do_gce = .FALSE.
+      gce%method = gce_method_direct
       gce%target_workfunction = 0.16_dp
       gce%prev_workfunction = -1001.0_dp
       gce%ref_esp = 0.0_dp
       gce%ref_position = 0.0_dp
       gce%ref_position_explicit = .FALSE.
       gce%mixing_coef = 0.3_dp
+      gce%nelec = -1.0_dp
+      gce%electron_velocity = 0.0_dp
+      gce%last_step = -1
+      gce%last_time = -1.0_dp
+      gce%random_counter = 0
+      gce%integration_dt = 0.0_dp
    END SUBROUTINE init_gce
 
 ! **************************************************************************************************
@@ -589,17 +614,89 @@ CONTAINS
       TYPE(gce_type), POINTER                            :: gce
       TYPE(section_vals_type), POINTER                   :: gce_section
 
+      INTEGER                                            :: i
+      INTEGER, DIMENSION(:), POINTER                     :: seed_vals
+      LOGICAL                                            :: explicit
+      REAL(KIND=dp)                                      :: discarded
+      REAL(KIND=dp), DIMENSION(3, 2)                     :: initial_seed
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: state_vals
+
+      NULLIFY (seed_vals, state_vals)
+
       CALL section_vals_val_get(gce_section, "_SECTION_PARAMETERS_", &
                                 l_val=gce%do_gce)
       IF (gce%do_gce) THEN
+         CALL section_vals_val_get(gce_section, "METHOD", i_val=gce%method)
          CALL section_vals_val_get(gce_section, "TARGET_WORKFUNCTION", &
                                    r_val=gce%target_workfunction)
          CALL section_vals_val_get(gce_section, "MIXING_COEF", &
                                    r_val=gce%mixing_coef)
+         CALL section_vals_val_get(gce_section, "ELECTRON_MASS", r_val=gce%electron_mass)
+         CALL section_vals_val_get(gce_section, "TEMPERATURE", r_val=gce%temperature)
+         CALL section_vals_val_get(gce_section, "CHAIN_LENGTH", i_val=gce%chain_length)
+         CALL section_vals_val_get(gce_section, "TIMECON", r_val=gce%timecon)
+         CALL section_vals_val_get(gce_section, "LANGEVIN_GAMMA", r_val=gce%langevin_gamma)
+         CALL section_vals_val_get(gce_section, "ELECTRON_NUMBER", r_val=gce%nelec)
+         CALL section_vals_val_get(gce_section, "ELECTRON_VELOCITY", r_val=gce%electron_velocity)
+         CALL section_vals_val_get(gce_section, "LAST_STEP", i_val=gce%last_step)
+         CALL section_vals_val_get(gce_section, "LAST_TIME", r_val=gce%last_time)
+         CALL section_vals_val_get(gce_section, "RANDOM_COUNTER", i_val=gce%random_counter)
          CALL section_vals_val_get(gce_section, "REFERENCE_POSITION", &
                                    explicit=gce%ref_position_explicit)
-         IF (gce%ref_position_explicit) &
+         IF (gce%ref_position_explicit) THEN
             CALL section_vals_val_get(gce_section, "REFERENCE_POSITION", r_val=gce%ref_position)
+         END IF
+
+         IF (gce%method == gce_method_nhc) THEN
+            IF (gce%chain_length < 1) THEN
+               CPABORT("GCE%CHAIN_LENGTH must be positive.")
+            END IF
+            ALLOCATE (gce%nhc_velocities(gce%chain_length))
+            gce%nhc_velocities = 0.0_dp
+
+            CALL section_vals_val_get(gce_section, "NHC_VELOCITIES", explicit=explicit)
+            IF (explicit) THEN
+               CALL section_vals_val_get(gce_section, "NHC_VELOCITIES", r_vals=state_vals)
+               IF (SIZE(state_vals) /= gce%chain_length) THEN
+                  CPABORT("GCE%NHC_VELOCITIES has the wrong length.")
+               END IF
+               gce%nhc_velocities = state_vals
+            END IF
+         END IF
+
+         IF (gce%method == gce_method_langevin) THEN
+            CALL section_vals_val_get(gce_section, "SEED", i_vals=seed_vals)
+            IF (SIZE(seed_vals) == 1) THEN
+               initial_seed = REAL(seed_vals(1), KIND=dp)
+            ELSE IF (SIZE(seed_vals) == 6) THEN
+               initial_seed = RESHAPE(REAL(seed_vals, KIND=dp), [3, 2])
+            ELSE
+               CPABORT("Supply exactly 1 or 6 arguments for GCE%SEED.")
+            END IF
+            gce%rng = rng_stream_type(name="GCE Langevin potentiostat", &
+                                      distribution_type=GAUSSIAN, &
+                                      seed=initial_seed, &
+                                      extended_precision=.TRUE.)
+            IF (gce%random_counter < 0) CPABORT("GCE%RANDOM_COUNTER must not be negative.")
+            DO i = 1, gce%random_counter
+               discarded = gce%rng%next()
+            END DO
+         END IF
+
+         IF (gce%method /= gce_method_direct .AND. gce%electron_mass <= 0.0_dp) THEN
+            CPABORT("GCE%ELECTRON_MASS must be positive.")
+         END IF
+         SELECT CASE (gce%method)
+         CASE (gce_method_direct)
+         CASE (gce_method_nhc)
+            IF (gce%temperature <= 0.0_dp) CPABORT("GCE%TEMPERATURE must be positive.")
+            IF (gce%timecon <= 0.0_dp) CPABORT("GCE%TIMECON must be positive.")
+         CASE (gce_method_langevin)
+            IF (gce%temperature < 0.0_dp) CPABORT("GCE%TEMPERATURE must not be negative.")
+            IF (gce%langevin_gamma < 0.0_dp) CPABORT("GCE%LANGEVIN_GAMMA must not be negative.")
+         CASE DEFAULT
+            CPABORT("Unknown GCE potentiostat method.")
+         END SELECT
       END IF ! do gce
    END SUBROUTINE read_gce_section
 
@@ -719,10 +816,30 @@ CONTAINS
             END IF
 
             IF (scf_control%gce%do_gce) THEN
-               WRITE (UNIT=output_unit, FMT="(T25,A,/,T25,A,T61,F20.1)") &
+               WRITE (UNIT=output_unit, FMT="(T25,A,/,T25,A,T61,F20.6)") &
                   REPEAT("-", 56), &
-                  "Target workfunction [eV]:", scf_control%gce%target_workfunction
-               WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.1)") "Mixing coefficient:", scf_control%gce%mixing_coef
+                  "Target workfunction [eV]:", scf_control%gce%target_workfunction*evolt
+               SELECT CASE (scf_control%gce%method)
+               CASE (gce_method_direct)
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,A20)") "Electron-number method:", "DIRECT"
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.6)") &
+                     "Mixing coefficient:", scf_control%gce%mixing_coef
+               CASE (gce_method_nhc)
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,A20)") &
+                     "Electron-number method:", "NOSE_HOOVER_CHAIN"
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.6)") &
+                     "Electron mass [eV*fs^2]:", cp_unit_from_cp2k(scf_control%gce%electron_mass, "eV*fs^2"), &
+                     "Potentiostat temperature [K]:", cp_unit_from_cp2k(scf_control%gce%temperature, "K"), &
+                     "NHC time constant [fs]:", cp_unit_from_cp2k(scf_control%gce%timecon, "fs")
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,I20)") &
+                     "NHC chain length:", scf_control%gce%chain_length
+               CASE (gce_method_langevin)
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,A20)") "Electron-number method:", "LANGEVIN"
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.6)") &
+                     "Electron mass [eV*fs^2]:", cp_unit_from_cp2k(scf_control%gce%electron_mass, "eV*fs^2"), &
+                     "Potentiostat temperature [K]:", cp_unit_from_cp2k(scf_control%gce%temperature, "K"), &
+                     "Langevin gamma [fs^-1]:", cp_unit_from_cp2k(scf_control%gce%langevin_gamma, "fs^-1")
+               END SELECT
                WRITE (UNIT=output_unit, FMT="(T25,A)") "Grand canonical SCF is activated."
             END IF
 

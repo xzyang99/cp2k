@@ -209,6 +209,10 @@ MODULE input_constants
                                                cholesky_inverse = 3, &
                                                cholesky_dbcsr = 4
 
+   INTEGER, PARAMETER, PUBLIC               :: gce_method_direct = 0, &
+                                               gce_method_nhc = 1, &
+                                               gce_method_langevin = 2
+
    INTEGER, PARAMETER, PUBLIC               :: atomic_guess = 1, &
                                                restart_guess = 2, &
                                                random_guess = 3, &

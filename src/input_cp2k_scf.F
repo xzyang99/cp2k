@@ -28,23 +28,23 @@ MODULE input_cp2k_scf
         cdft_alpha_constraint, cdft_beta_constraint, cdft_charge_constraint, &
         cdft_magnetization_constraint, cholesky_dbcsr, cholesky_inverse, cholesky_off, &
         cholesky_reduce, cholesky_restore, core_guess, diag_block_davidson, diag_block_krylov, &
-        diag_filter_matrix, diag_ot, diag_standard, eht_guess, gaussian, general_roks, &
-        high_spin_roks, history_guess, jacobian_fd1, jacobian_fd1_backward, jacobian_fd1_central, &
-        jacobian_fd2, jacobian_fd2_backward, ls_2pnt, ls_3pnt, ls_adapt, ls_gold, ls_none, &
-        mopac_guess, no_guess, numerical, ot_algo_irac, ot_algo_taylor_or_diag, ot_chol_irac, &
-        ot_lwdn_irac, ot_mini_broyden, ot_mini_cg, ot_mini_diis, ot_mini_sd, ot_poly_irac, &
-        ot_precond_full_all, ot_precond_full_kinetic, ot_precond_full_single, &
-        ot_precond_full_single_inverse, ot_precond_none, ot_precond_s_inverse, &
-        ot_precond_solver_default, ot_precond_solver_direct, ot_precond_solver_inv_chol, &
-        ot_precond_solver_update, outer_scf_basis_center_opt, outer_scf_becke_constraint, &
-        outer_scf_cdft_constraint, outer_scf_ddapc_constraint, outer_scf_hirshfeld_constraint, &
-        outer_scf_none, outer_scf_optimizer_bisect, outer_scf_optimizer_broyden, &
-        outer_scf_optimizer_diis, outer_scf_optimizer_newton, outer_scf_optimizer_newton_ls, &
-        outer_scf_optimizer_none, outer_scf_optimizer_sd, outer_scf_optimizer_secant, &
-        outer_scf_s2_constraint, radius_covalent, radius_default, radius_single, radius_user, &
-        radius_vdw, random_guess, restart_guess, shape_function_density, shape_function_gaussian, &
-        smear_energy_window, smear_fermi_dirac, smear_gaussian, smear_list, smear_mp, smear_mv, &
-        sparse_guess
+        diag_filter_matrix, diag_ot, diag_standard, eht_guess, gaussian, gce_method_direct, &
+        gce_method_langevin, gce_method_nhc, general_roks, high_spin_roks, history_guess, &
+        jacobian_fd1, jacobian_fd1_backward, jacobian_fd1_central, jacobian_fd2, &
+        jacobian_fd2_backward, ls_2pnt, ls_3pnt, ls_adapt, ls_gold, ls_none, mopac_guess, &
+        no_guess, numerical, ot_algo_irac, ot_algo_taylor_or_diag, ot_chol_irac, ot_lwdn_irac, &
+        ot_mini_broyden, ot_mini_cg, ot_mini_diis, ot_mini_sd, ot_poly_irac, ot_precond_full_all, &
+        ot_precond_full_kinetic, ot_precond_full_single, ot_precond_full_single_inverse, &
+        ot_precond_none, ot_precond_s_inverse, ot_precond_solver_default, &
+        ot_precond_solver_direct, ot_precond_solver_inv_chol, ot_precond_solver_update, &
+        outer_scf_basis_center_opt, outer_scf_becke_constraint, outer_scf_cdft_constraint, &
+        outer_scf_ddapc_constraint, outer_scf_hirshfeld_constraint, outer_scf_none, &
+        outer_scf_optimizer_bisect, outer_scf_optimizer_broyden, outer_scf_optimizer_diis, &
+        outer_scf_optimizer_newton, outer_scf_optimizer_newton_ls, outer_scf_optimizer_none, &
+        outer_scf_optimizer_sd, outer_scf_optimizer_secant, outer_scf_s2_constraint, &
+        radius_covalent, radius_default, radius_single, radius_user, radius_vdw, random_guess, &
+        restart_guess, shape_function_density, shape_function_gaussian, smear_energy_window, &
+        smear_fermi_dirac, smear_gaussian, smear_list, smear_mp, smear_mv, sparse_guess
    USE input_keyword_types,             ONLY: keyword_create,&
                                               keyword_release,&
                                               keyword_type
@@ -2076,8 +2076,10 @@ CONTAINS
                           "counter charge screens the net charge of the DFT slab, so "// &
                           "that the work function can be obtained from the planar "// &
                           "averaged Hartree potential in the implicit solvent region "// &
-                          "or vacuum region. During the SCF iterations, the work "// &
-                          "function is mixed toward the target value. "// &
+                          "or vacuum region. DIRECT mixes the work function toward "// &
+                          "the target during SCF. The dynamic methods keep a fixed "// &
+                          "fractional electron number during each SCF and propagate "// &
+                          "that number once per molecular-dynamics step. "// &
                           "The reported GCE charges during SCF iterations are the "// &
                           "current net charge of the DFT system excluding the planar "// &
                           "counter charge. A positive value means electron deficiency. "// &
@@ -2088,7 +2090,7 @@ CONTAINS
                           "total energy and the product of the target work function "// &
                           "and N_e^(abs,alpha).", &
                           citations=[Chai2024a], &
-                          n_keywords=4, &
+                          n_keywords=17, &
                           n_subsections=0, &
                           repeats=.FALSE.)
 
@@ -2100,6 +2102,18 @@ CONTAINS
                           usage="&GCE ON", &
                           default_l_val=.FALSE., &
                           lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="METHOD", &
+                          description="Selects how the electron number is controlled. DIRECT mixes the work function "// &
+                          "inside the SCF cycle. NOSE_HOOVER_CHAIN and LANGEVIN propagate a fractional electron "// &
+                          "number once per molecular-dynamics step while each SCF cycle keeps that number fixed.", &
+                          usage="METHOD DIRECT", &
+                          default_i_val=gce_method_direct, &
+                          enum_c_vals=s2a("DIRECT", "NOSE_HOOVER_CHAIN", "LANGEVIN"), &
+                          enum_i_vals=[gce_method_direct, gce_method_nhc, gce_method_langevin])
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -2124,6 +2138,114 @@ CONTAINS
                           type_of_var=real_t, &
                           default_r_val=0.3_dp, &
                           usage="MIXING_COEF 0.3")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="ELECTRON_MASS", &
+                          description="Fictitious mass of the fractional electron-number degree of freedom used by "// &
+                          "the dynamic potentiostat methods.", &
+                          default_r_val=cp_unit_to_cp2k(660.74_dp, "eV*fs^2"), &
+                          unit_str="eV*fs^2", &
+                          usage="ELECTRON_MASS [eV*fs^2] 660.74")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="TEMPERATURE", &
+                          description="Temperature of the electron-number potentiostat.", &
+                          default_r_val=cp_unit_to_cp2k(300.0_dp, "K"), &
+                          unit_str="K", &
+                          usage="TEMPERATURE [K] 300")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="CHAIN_LENGTH", &
+                          description="Number of thermostats in the Nose-Hoover chain.", &
+                          default_i_val=1, &
+                          usage="CHAIN_LENGTH 1")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="TIMECON", &
+                          description="Time constant used to derive the Nose-Hoover chain masses.", &
+                          default_r_val=cp_unit_to_cp2k(9.015_dp, "fs"), &
+                          unit_str="fs", &
+                          usage="TIMECON [fs] 9.015")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="LANGEVIN_GAMMA", &
+                          description="Friction coefficient of the Langevin electron-number potentiostat.", &
+                          default_r_val=cp_unit_to_cp2k(0.01_dp, "fs^-1"), &
+                          unit_str="fs^-1", &
+                          usage="LANGEVIN_GAMMA [fs^-1] 0.01")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="SEED", &
+                          description="Initial seed for the Langevin Gaussian random-number stream. Exactly one or "// &
+                          "six positive integers are accepted.", &
+                          n_var=-1, &
+                          type_of_var=integer_t, &
+                          default_i_vals=[2000], &
+                          usage="SEED 2000")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="ELECTRON_NUMBER", &
+                          description="Initial fractional electron number for a dynamic potentiostat. A negative "// &
+                          "value selects the electron number defined by CHARGE and MULTIPLICITY. Restart files "// &
+                          "replace this value with the current electron number.", &
+                          default_r_val=-1.0_dp, &
+                          usage="ELECTRON_NUMBER -1")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="ELECTRON_VELOCITY", &
+                          description="Initial velocity of the fractional electron number. Restart files replace "// &
+                          "this value with the current velocity.", &
+                          default_r_val=0.0_dp, &
+                          unit_str="fs^-1", &
+                          usage="ELECTRON_VELOCITY [fs^-1] 0")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="LAST_STEP", &
+                          description="Last MD step propagated by the dynamic potentiostat. This restart value is "// &
+                          "normally written by CP2K and should not be set for a new trajectory.", &
+                          default_i_val=-1)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="LAST_TIME", &
+                          description="Last MD time propagated by the dynamic potentiostat. This restart value is "// &
+                          "normally written by CP2K and should not be set for a new trajectory.", &
+                          default_r_val=cp_unit_to_cp2k(-1.0_dp, "fs"), &
+                          unit_str="fs")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="RANDOM_COUNTER", &
+                          description="Number of Gaussian samples already consumed by the Langevin potentiostat. "// &
+                          "This value is maintained in restart files.", &
+                          default_i_val=0)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="NHC_VELOCITIES", &
+                          description="Nose-Hoover chain velocities stored in restart files.", &
+                          repeats=.FALSE., n_var=-1, type_of_var=real_t, unit_str="fs^-1")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

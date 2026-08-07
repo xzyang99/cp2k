@@ -31,6 +31,7 @@ MODULE input_restart_force_eval
                                               use_qs_force
    USE input_constants,                 ONLY: do_coord_cp2k,&
                                               ehrenfest,&
+                                              gce_method_direct,&
                                               mol_dyn_run,&
                                               mon_car_run,&
                                               pint_run,&
@@ -57,6 +58,7 @@ MODULE input_restart_force_eval
    USE particle_list_types,             ONLY: particle_list_type
    USE qmmm_ff_fist,                    ONLY: qmmm_ff_precond_only_qm
    USE qs_environment_types,            ONLY: get_qs_env
+   USE scf_control_types,               ONLY: scf_control_type
    USE string_utilities,                ONLY: string_to_ascii
    USE virial_types,                    ONLY: virial_type
 #include "./base/base_uses.f90"
@@ -98,13 +100,13 @@ CONTAINS
       TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_subsys_type), POINTER                      :: subsys
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(section_vals_type), POINTER                   :: cell_section, dft_section, &
-                                                            force_env_sections, qmmm_section, &
-                                                            rng_section, subsys_section, &
-                                                            tmp_section
+      TYPE(scf_control_type), POINTER                    :: scf_control
+      TYPE(section_vals_type), POINTER :: cell_section, dft_section, force_env_sections, &
+         gce_section, qmmm_section, rng_section, subsys_section, tmp_section
       TYPE(virial_type), POINTER                         :: virial
 
-      NULLIFY (rng_section, subsys_section, cell_section, virial, subsys, cell, dft_control, work, tmp_section)
+      NULLIFY (rng_section, subsys_section, cell_section, virial, subsys, cell, dft_control, &
+               scf_control, work, tmp_section, gce_section)
       ! If it's not a dynamical run don't update the velocity section
       CALL section_vals_val_get(root_section, "GLOBAL%RUN_TYPE", i_val=myid)
       skip_vel_section = ((myid /= mol_dyn_run) .AND. &
@@ -191,7 +193,23 @@ CONTAINS
       END IF
 
       IF (ASSOCIATED(force_env%qs_env)) THEN
-         CALL get_qs_env(force_env%qs_env, dft_control=dft_control)
+         CALL get_qs_env(force_env%qs_env, dft_control=dft_control, scf_control=scf_control)
+         IF (scf_control%gce%do_gce .AND. scf_control%gce%method /= gce_method_direct) THEN
+            dft_section => section_vals_get_subs_vals3(force_env_sections, "DFT", &
+                                                       i_rep_section=i_force_eval(1))
+            gce_section => section_vals_get_subs_vals(dft_section, "SCF%GCE")
+            CALL section_vals_val_set(gce_section, "ELECTRON_NUMBER", r_val=scf_control%gce%nelec)
+            CALL section_vals_val_set(gce_section, "ELECTRON_VELOCITY", &
+                                      r_val=scf_control%gce%electron_velocity)
+            CALL section_vals_val_set(gce_section, "LAST_STEP", i_val=scf_control%gce%last_step)
+            CALL section_vals_val_set(gce_section, "LAST_TIME", r_val=scf_control%gce%last_time)
+            CALL section_vals_val_set(gce_section, "RANDOM_COUNTER", i_val=scf_control%gce%random_counter)
+            IF (ALLOCATED(scf_control%gce%nhc_velocities)) THEN
+               ALLOCATE (work(SIZE(scf_control%gce%nhc_velocities)))
+               work = scf_control%gce%nhc_velocities
+               CALL section_vals_val_set(gce_section, "NHC_VELOCITIES", r_vals_ptr=work)
+            END IF
+         END IF
          dft_section => section_vals_get_subs_vals(force_env_sections, "DFT", &
                                                    i_rep_section=i_force_eval(iforce_eval))
          tmp_section => section_vals_get_subs_vals(dft_section, "REAL_TIME_PROPAGATION")

@@ -17,7 +17,8 @@ MODULE qs_mo_occupation
    USE cp_control_types,                ONLY: hairy_probes_type
    USE cp_log_handling,                 ONLY: cp_to_string
    USE hairy_probes,                    ONLY: probe_occupancy
-   USE input_constants,                 ONLY: smear_energy_window,&
+   USE input_constants,                 ONLY: gce_method_direct,&
+                                              smear_energy_window,&
                                               smear_fermi_dirac,&
                                               smear_gaussian,&
                                               smear_list,&
@@ -77,7 +78,7 @@ CONTAINS
                                                             lfomo_a, lfomo_b, nmo_a, nmo_b, &
                                                             xas_estate
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: all_index
-      LOGICAL                                            :: do_gce, is_large
+      LOGICAL                                            :: do_gce, dynamic_gce, is_large
       REAL(KIND=dp)                                      :: all_nelec, kTS, mu, nelec_a, nelec_b, &
                                                             occ_estate, smear_width
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: all_eigval, all_occ
@@ -100,8 +101,10 @@ CONTAINS
 
       CALL sort(all_eigval, all_nmo, all_index)
 
+      dynamic_gce = .FALSE.
       IF (PRESENT(gce)) THEN
          do_gce = gce%do_gce
+         IF (do_gce) dynamic_gce = gce%method /= gce_method_direct
       ELSE
          do_gce = .FALSE.
       END IF
@@ -123,7 +126,7 @@ CONTAINS
          CPABORT("set_mo_occupation_3: unsupported smearing method")
       END SELECT
 
-      IF (.NOT. do_gce) THEN
+      IF (.NOT. do_gce .OR. dynamic_gce) THEN
          xas_estate = -1
          occ_estate = 0.0_dp
 
@@ -142,8 +145,10 @@ CONTAINS
             END IF
          END DO
 
+         IF (dynamic_gce) all_nelec = gce%nelec
          CALL SmearFixed(all_occ, mu, kTS, all_eigval, all_nelec, &
                          smear_width, 1._dp, smear%method, xas_estate, occ_estate)
+         IF (dynamic_gce) gce%prev_workfunction = gce%ref_esp - mu
       ELSE
          gce%prev_workfunction = gce%ref_esp - mo_array(1)%mu
          mu = gce%ref_esp - ((1.0_dp - gce%mixing_coef)*gce%prev_workfunction + gce%mixing_coef*gce%target_workfunction)
@@ -160,7 +165,7 @@ CONTAINS
                       TRIM(method_label)//" smearing includes the last MO => "// &
                       "Add more MOs for proper smearing.")
       END IF
-      IF (.NOT. do_gce) THEN
+      IF (.NOT. do_gce .OR. dynamic_gce) THEN
          ! check that the total electron count is accurate
          is_large = (ABS(all_nelec - accurate_sum(all_occ(:))) > smear%eps_fermi_dirac*all_nelec)
          CPWARN_IF(is_large, "Total number of electrons is not accurate")
@@ -524,7 +529,12 @@ CONTAINS
             IF (smear%method /= smear_fermi_dirac) THEN
                CPABORT("Grand canonical ensemble DFT SCF now only support Fermi Dirac smearing.")
             END IF
-            IF (gce%prev_workfunction < -1000.0_dp) THEN
+            IF (gce%method /= gce_method_direct) THEN
+               my_nelec = gce%nelec
+               CALL SmearFixed(mo_set%occupation_numbers, mo_set%mu, mo_set%kTS, mo_set%eigenvalues, my_nelec, &
+                               smear%electronic_temperature, mo_set%maxocc, smear_fermi_dirac)
+               gce%prev_workfunction = gce%ref_esp - mo_set%mu
+            ELSE IF (gce%prev_workfunction < -1000.0_dp) THEN
                my_nelec = REAL(mo_set%nelectron, dp)
                CALL SmearFixed(mo_set%occupation_numbers, mo_set%mu, mo_set%kTS, mo_set%eigenvalues, my_nelec, &
                                smear%electronic_temperature, mo_set%maxocc, smear_fermi_dirac)

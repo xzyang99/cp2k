@@ -78,6 +78,8 @@ MODULE qs_scf
                                               test_for_result
    USE cp_result_types,                 ONLY: cp_result_type
    USE ec_env_types,                    ONLY: energy_correction_type
+   USE gce_potentiostat,                ONLY: gce_potentiostat_finish,&
+                                              gce_potentiostat_prepare
    USE input_constants,                 ONLY: &
         broyden_type_1, broyden_type_1_explicit, broyden_type_1_explicit_ls, broyden_type_1_ls, &
         broyden_type_2, broyden_type_2_explicit, broyden_type_2_explicit_ls, broyden_type_2_ls, &
@@ -240,6 +242,8 @@ CONTAINS
                       dft_control=dft_control, scf_control=scf_control)
       IF (scf_control%max_scf > 0) THEN
 
+         CALL gce_potentiostat_prepare(qs_env)
+
          dft_section => section_vals_get_subs_vals(input, "DFT")
          scf_section => section_vals_get_subs_vals(dft_section, "SCF")
 
@@ -265,6 +269,8 @@ CONTAINS
             ! Third SCF loop needed for CDFT with OT to properly restart OT inner loop
             CALL cdft_scf(qs_env=qs_env, should_stop=should_stop)
          END IF
+
+         CALL gce_potentiostat_finish(qs_env)
 
          ! If SCF has not converged, then we should not start MP2
          IF (ASSOCIATED(qs_env%mp2_env)) qs_env%mp2_env%hf_fail = .NOT. converged
