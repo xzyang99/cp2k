@@ -816,8 +816,9 @@ CONTAINS
                IF (.NOT. scf_control%gce%do_gce) THEN
                   CALL set_mo_occupation(mo_set=mos(ispin), &
                                          smear=scf_control%smear)
-               ELSE
-                  CALL set_mo_occupation(mo_set=mos(ispin), &
+               ! GCE uses one chemical potential and total electron count across all spin channels.
+               ELSE IF (ispin == 1) THEN
+                  CALL set_mo_occupation(mo_array=mos, &
                                          smear=scf_control%smear, &
                                          gce=scf_control%gce)
                END IF

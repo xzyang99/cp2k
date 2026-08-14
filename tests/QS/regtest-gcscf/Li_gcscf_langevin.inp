@@ -32,7 +32,7 @@
       EPS_DEFAULT 1.0E-10
     &END QS
     &SCF
-      ADDED_MOS 10
+      ADDED_MOS 5
       CHOLESKY INVERSE
       EPS_SCF 1.0E-9
       MAX_SCF 100
