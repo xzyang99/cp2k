@@ -1628,8 +1628,9 @@ CONTAINS
          IF (.NOT. scf_control%smear%do_smear) THEN
             CPABORT("Grand canonical SCF requires smearing.")
          END IF
-         IF (scf_control%smear%method /= smear_fermi_dirac) THEN
-            CPABORT("Grand canonical SCF is only implemented for Fermi-Dirac way of smearing.")
+         ! The unrestricted occupation update supports all smearing methods with GCE
+         IF (scf_control%smear%method /= smear_fermi_dirac .AND. dft_control%nspins == 1) THEN
+            CPABORT("Grand canonical SCF with RKS is only implemented for Fermi-Dirac smearing.")
          END IF
          IF (scf_control%use_ot .OR. .NOT. scf_control%use_diag .OR. &
              scf_control%diagonalization%method == diag_ot) THEN
