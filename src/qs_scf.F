@@ -267,7 +267,8 @@ CONTAINS
                                 converged=converged, should_stop=should_stop, total_scf_steps=tsteps)
          ELSE
             ! Third SCF loop needed for CDFT with OT to properly restart OT inner loop
-            CALL cdft_scf(qs_env=qs_env, should_stop=should_stop)
+            CALL cdft_scf(qs_env=qs_env, should_stop=should_stop, has_converged=converged, &
+                          total_scf_steps=tsteps)
          END IF
 
          CALL gce_potentiostat_finish(qs_env)
@@ -1156,21 +1157,26 @@ CONTAINS
 !> \brief perform a CDFT scf procedure in the given qs_env
 !> \param qs_env the qs_environment where to perform the scf procedure
 !> \param should_stop flag determining if calculation should stop
+!> \param has_converged whether both the CDFT loop and the final inner SCF converged
+!> \param total_scf_steps total number of inner SCF steps
 !> \par History
 !>      12.2015 Created
 !> \author Nico Holmberg
 ! **************************************************************************************************
-   SUBROUTINE cdft_scf(qs_env, should_stop)
+   SUBROUTINE cdft_scf(qs_env, should_stop, has_converged, total_scf_steps)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       LOGICAL, INTENT(OUT)                               :: should_stop
+      LOGICAL, INTENT(OUT), OPTIONAL                     :: has_converged
+      INTEGER, INTENT(OUT), OPTIONAL                     :: total_scf_steps
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'cdft_scf'
 
       INTEGER                                            :: handle, iatom, iimage, ispin, ivar, nmo, &
                                                             nvar, output_unit, tsteps
-      LOGICAL                                            :: cdft_loop_converged, converged, &
-                                                            exit_cdft_loop, first_iteration, &
-                                                            my_uocc, uniform_occupation
+      LOGICAL                                            :: cdft_loop_converged, constraint_met, &
+                                                            converged, exit_cdft_loop, &
+                                                            first_iteration, my_uocc, &
+                                                            uniform_occupation
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: gapw_cdft_values
       REAL(KIND=dp), DIMENSION(:), POINTER               :: mo_occupations
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
@@ -1267,9 +1273,20 @@ CONTAINS
          CALL outer_loop_switch(scf_env, scf_control, cdft_control, ot2cdft)
          CALL qs_scf_check_outer_exit(qs_env, scf_env, scf_control, should_stop, &
                                       cdft_loop_converged, exit_cdft_loop)
+         ! A satisfied constraint does not make the CDFT loop converged if the inner SCF failed
+         constraint_met = cdft_loop_converged
+         cdft_loop_converged = cdft_loop_converged .AND. converged
          CALL qs_scf_cdft_info(output_unit, scf_control, scf_env, cdft_control, &
                                energy, cdft_control%total_steps, &
                                should_stop, cdft_loop_converged, cdft_loop=.TRUE.)
+         IF (constraint_met .AND. .NOT. converged .AND. output_unit > 0) THEN
+            WRITE (output_unit, '(T3,A,I4,A,/)') &
+               "CDFT constraint satisfied after ", scf_env%outer_scf%iter_count, &
+               " iterations, but the inner SCF did NOT converge"
+         END IF
+         IF (exit_cdft_loop .AND. .NOT. cdft_loop_converged .AND. .NOT. should_stop) THEN
+            CPWARN("CDFT SCF loop NOT converged")
+         END IF
          IF (exit_cdft_loop) EXIT cdft_outer_loop
          ! Check if the inverse Jacobian needs to be calculated
          CALL qs_calculate_inverse_jacobian(qs_env)
@@ -1281,6 +1298,8 @@ CONTAINS
          CALL qs_ks_did_change(ks_env, potential_changed=.TRUE.)
       END DO cdft_outer_loop
 
+      IF (PRESENT(has_converged)) has_converged = cdft_loop_converged
+      IF (PRESENT(total_scf_steps)) total_scf_steps = cdft_control%total_steps
       cdft_control%ienergy = cdft_control%ienergy + 1
 
       ! Store needed arrays for ET coupling calculation
