@@ -77,7 +77,7 @@ CONTAINS
                                                             lfomo_a, lfomo_b, nmo_a, nmo_b, &
                                                             xas_estate
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: all_index
-      LOGICAL                                            :: do_gce, is_large
+      LOGICAL                                            :: do_gce, fixed_nelec, is_large
       REAL(KIND=dp)                                      :: all_nelec, kTS, mu, nelec_a, nelec_b, &
                                                             occ_estate, smear_width
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: all_eigval, all_occ
@@ -105,6 +105,9 @@ CONTAINS
       ELSE
          do_gce = .FALSE.
       END IF
+      ! GCE starts from the reference electron number until the work function is known
+      fixed_nelec = .NOT. do_gce
+      IF (do_gce) fixed_nelec = (gce%prev_workfunction < -500.0_dp)
 
       SELECT CASE (smear%method)
       CASE (smear_fermi_dirac)
@@ -123,7 +126,7 @@ CONTAINS
          CPABORT("set_mo_occupation_3: unsupported smearing method")
       END SELECT
 
-      IF (.NOT. do_gce) THEN
+      IF (fixed_nelec) THEN
          xas_estate = -1
          occ_estate = 0.0_dp
 
@@ -142,8 +145,17 @@ CONTAINS
             END IF
          END DO
 
+         IF (do_gce) all_nelec = REAL(mo_array(1)%nelectron + mo_array(2)%nelectron, dp)
          CALL SmearFixed(all_occ, mu, kTS, all_eigval, all_nelec, &
                          smear_width, 1._dp, smear%method, xas_estate, occ_estate)
+         IF (do_gce) THEN
+            ! As in set_mo_occupation_1, the first call precedes the reference potential
+            IF (gce%prev_workfunction < -1000.0_dp) THEN
+               gce%prev_workfunction = -501.0_dp
+            ELSE
+               gce%prev_workfunction = gce%ref_esp - mu
+            END IF
+         END IF
       ELSE
          gce%prev_workfunction = gce%ref_esp - mo_array(1)%mu
          mu = gce%ref_esp - ((1.0_dp - gce%mixing_coef)*gce%prev_workfunction + gce%mixing_coef*gce%target_workfunction)
@@ -160,7 +172,7 @@ CONTAINS
                       TRIM(method_label)//" smearing includes the last MO => "// &
                       "Add more MOs for proper smearing.")
       END IF
-      IF (.NOT. do_gce) THEN
+      IF (fixed_nelec) THEN
          ! check that the total electron count is accurate
          is_large = (ABS(all_nelec - accurate_sum(all_occ(:))) > smear%eps_fermi_dirac*all_nelec)
          CPWARN_IF(is_large, "Total number of electrons is not accurate")

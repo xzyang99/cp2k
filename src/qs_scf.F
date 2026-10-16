@@ -1362,11 +1362,11 @@ CONTAINS
                   CALL set_mo_occupation(mo_set=mos(ispin), &
                                          smear=scf_control%smear, &
                                          emit_warnings=.NOT. do_kpoints)
-               ELSE
-                  CALL set_mo_occupation(mo_set=mos(ispin), &
+               ELSE IF (ispin == 1) THEN
+                  ! GCE determines one chemical potential for all spins
+                  CALL set_mo_occupation(mo_array=mos, &
                                          smear=scf_control%smear, &
-                                         gce=scf_control%gce, &
-                                         emit_warnings=.NOT. do_kpoints)
+                                         gce=scf_control%gce)
                END IF
             END IF
          END IF
