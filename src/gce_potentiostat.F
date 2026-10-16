@@ -8,12 +8,13 @@
 ! **************************************************************************************************
 !> \brief Dynamic grand canonical potentiostats: the electron number N is a fictitious particle
 !>        with mass m driven by the force WF - TWF (work function minus its target) and coupled
-!>        to a Nose-Hoover chain thermostat. N is propagated once per MD step with
+!>        to a Nose-Hoover chain or Langevin thermostat. N is propagated once per MD step with
 !>        velocity Verlet, split around the SCF that is run at fixed N.
 ! **************************************************************************************************
 MODULE gce_potentiostat
 
    USE input_constants,                 ONLY: gce_method_direct,&
+                                              gce_method_langevin,&
                                               gce_method_nhc
    USE kinds,                           ONLY: dp
    USE qs_environment_types,            ONLY: get_qs_env,&
@@ -36,14 +37,15 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Propagates N to the current MD time before the SCF, using the work function of the
-!>        previous step: thermostat half step, half kick and drift.
+!>        previous step: thermostat half step, half kick and drift (NHC), or the B-A-O-A part of
+!>        BAOAB (Langevin).
 !> \param qs_env ...
 ! **************************************************************************************************
    SUBROUTINE gce_potentiostat_prepare(qs_env)
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
       INTEGER                                            :: ispin, nelectron
-      REAL(KIND=dp)                                      :: dt
+      REAL(KIND=dp)                                      :: c, dt
       TYPE(gce_type), POINTER                            :: gce
       TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(scf_control_type), POINTER                    :: scf_control
@@ -71,6 +73,13 @@ CONTAINS
             CALL nhc_half_step(gce)
             CALL kick(gce)
             gce%nelec = gce%nelec + dt*gce%electron_velocity
+         CASE (gce_method_langevin)
+            CALL kick(gce)
+            gce%nelec = gce%nelec + 0.5_dp*dt*gce%electron_velocity
+            c = EXP(-gce%langevin_gamma*dt)
+            gce%electron_velocity = c*gce%electron_velocity + &
+                                    SQRT((1.0_dp - c*c)*gce%temperature/gce%electron_mass)*gce%rng%next()
+            gce%nelec = gce%nelec + 0.5_dp*dt*gce%electron_velocity
          END SELECT
       ELSE IF (dt < 0.0_dp .AND. qs_env%sim_time /= 0.0_dp) THEN
          ! dt < 0 at time zero is the initial force evaluation of a restarted MD run

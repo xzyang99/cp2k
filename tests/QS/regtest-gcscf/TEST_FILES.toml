@@ -5,3 +5,4 @@
 "Li_gcscf_mv.inp"                 = [{matcher="E_total", tol=1e-9, ref=-44.03442503430527}]
 "Li_gcscf_single.inp"             = [{matcher="E_total", tol=1e-8, ref=-44.054372687014570}]
 "Li_gcscf_nhc.inp"                = [{matcher="E_total", tol=1e-8, ref=-44.05713739117612}]
+"Li_gcscf_langevin.inp"           = [{matcher="E_total", tol=1e-8, ref=-44.05813805525848}]

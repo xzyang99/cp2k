@@ -31,7 +31,7 @@ MODULE input_cp2k_scf
         cholesky_reduce, cholesky_restore, core_guess, diag_block_davidson, diag_block_krylov, &
         diag_filter_matrix, diag_ot, diag_standard, diag_update_method_adiis, &
         diag_update_method_mixing, eht_guess, external_density_guess, gaussian, &
-        gce_method_direct, gce_method_nhc, general_roks, &
+        gce_method_direct, gce_method_langevin, gce_method_nhc, general_roks, &
         high_spin_roks, history_guess, jacobian_fd1, jacobian_fd1_backward, jacobian_fd1_central, &
         jacobian_fd2, jacobian_fd2_backward, ls_2pnt, ls_3pnt, ls_adapt, ls_gold, ls_none, &
         mopac_guess, no_guess, numerical, ot_algo_irac, ot_algo_taylor_or_diag, ot_chol_irac, &
@@ -2330,7 +2330,7 @@ CONTAINS
                           "total energy and the product of the target work function "// &
                           "and N_e^(abs,alpha).", &
                           citations=[Chai2024a], &
-                          n_keywords=11, &
+                          n_keywords=13, &
                           n_subsections=0, &
                           repeats=.FALSE.)
 
@@ -2387,13 +2387,15 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="METHOD", &
                           description="How the electron number is driven toward the target work function.", &
-                          enum_c_vals=s2a("DIRECT", "NOSE_HOOVER_CHAIN"), &
-                          enum_i_vals=[gce_method_direct, gce_method_nhc], &
+                          enum_c_vals=s2a("DIRECT", "NOSE_HOOVER_CHAIN", "LANGEVIN"), &
+                          enum_i_vals=[gce_method_direct, gce_method_nhc, gce_method_langevin], &
                           enum_desc=s2a("Mix the work function toward the target during the SCF", &
                                         "Propagate the electron number once per MD step with a "// &
-                                        "Nose-Hoover chain thermostat"), &
+                                        "Nose-Hoover chain thermostat", &
+                                        "Propagate the electron number once per MD step with "// &
+                                        "Langevin dynamics (BAOAB)"), &
                           default_i_val=gce_method_direct, &
-                          usage="METHOD NOSE_HOOVER_CHAIN")
+                          usage="METHOD LANGEVIN")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -2426,6 +2428,23 @@ CONTAINS
                           default_r_val=cp_unit_to_cp2k(9.015_dp, "fs"), &
                           unit_str="fs", &
                           usage="TIMECON [fs] 9.015")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="LANGEVIN_GAMMA", &
+                          description="Friction coefficient of the Langevin method.", &
+                          default_r_val=cp_unit_to_cp2k(0.01_dp, "fs^-1"), &
+                          unit_str="fs^-1", &
+                          usage="LANGEVIN_GAMMA [fs^-1] 0.01")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="SEED", &
+                          description="Seed of the Langevin random number stream, given as 1 or 6 integers.", &
+                          n_var=-1, &
+                          type_of_var=integer_t, &
+                          default_i_vals=[2000], &
+                          usage="SEED 2000")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

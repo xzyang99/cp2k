@@ -25,7 +25,7 @@ MODULE scf_control_types
    USE ieee_arithmetic,                 ONLY: ieee_is_finite
    USE input_constants,                 ONLY: &
         atomic_guess, diag_ot, diag_update_method_adiis, diag_update_method_mixing, direct_p_mix, &
-        external_density_guess, gce_method_direct, gce_method_nhc, &
+        external_density_guess, gce_method_direct, gce_method_langevin, gce_method_nhc, &
         general_roks, high_spin_roks, no_guess, no_mix, &
         ot_algo_taylor_or_diag, outer_scf_basis_center_opt, outer_scf_cdft_constraint, &
         outer_scf_ddapc_constraint, outer_scf_none, outer_scf_optimizer_bisect, &
@@ -50,6 +50,8 @@ MODULE scf_control_types
                                               dp
    USE outer_scf_control_types,         ONLY: outer_scf_control_type,&
                                               outer_scf_read_parameters
+   USE parallel_rng_types,              ONLY: GAUSSIAN,&
+                                              rng_stream_type
    USE physcon,                         ONLY: evolt
    USE qs_cdft_opt_types,               ONLY: cdft_opt_type_release
    USE qs_ot_types,                     ONLY: ot_readwrite_input,&
@@ -176,9 +178,11 @@ MODULE scf_control_types
                                                electron_mass = 0.0_dp, &
                                                temperature = 0.0_dp, &
                                                timecon = 0.0_dp, &
+                                               langevin_gamma = 0.0_dp, &
                                                last_time = -1.0_dp, &
                                                dt = 0.0_dp
       REAL(KIND=dp), DIMENSION(:), ALLOCATABLE :: nhc_velocities
+      TYPE(rng_stream_type)                 :: rng
    END TYPE gce_type
 
 CONTAINS
@@ -664,8 +668,11 @@ CONTAINS
       TYPE(gce_type), POINTER                            :: gce
       TYPE(section_vals_type), POINTER                   :: gce_section
 
+      INTEGER, DIMENSION(:), POINTER                     :: seed
       LOGICAL                                            :: explicit
+      REAL(KIND=dp), DIMENSION(3, 2)                     :: initial_seed
 
+      NULLIFY (seed)
       CALL section_vals_val_get(gce_section, "_SECTION_PARAMETERS_", &
                                 l_val=gce%do_gce)
       IF (gce%do_gce) THEN
@@ -698,6 +705,20 @@ CONTAINS
                CPABORT("GCE NOSE_HOOVER_CHAIN requires a positive TEMPERATURE and TIMECON.")
             ALLOCATE (gce%nhc_velocities(gce%chain_length))
             gce%nhc_velocities = 0.0_dp
+         CASE (gce_method_langevin)
+            CALL section_vals_val_get(gce_section, "LANGEVIN_GAMMA", r_val=gce%langevin_gamma)
+            IF (gce%langevin_gamma < 0.0_dp) CPABORT("GCE%LANGEVIN_GAMMA must not be negative.")
+            CALL section_vals_val_get(gce_section, "SEED", i_vals=seed)
+            SELECT CASE (SIZE(seed))
+            CASE (1)
+               initial_seed(:, :) = REAL(seed(1), KIND=dp)
+            CASE (6)
+               initial_seed(:, :) = RESHAPE(REAL(seed, KIND=dp), [3, 2])
+            CASE DEFAULT
+               CPABORT("GCE%SEED takes exactly 1 or 6 integers.")
+            END SELECT
+            gce%rng = rng_stream_type(name="GCE Langevin potentiostat", distribution_type=GAUSSIAN, &
+                                      seed=initial_seed, extended_precision=.TRUE.)
          END SELECT
       END IF ! do gce
    END SUBROUTINE read_gce_section
@@ -849,6 +870,10 @@ CONTAINS
                   WRITE (UNIT=output_unit, FMT="(T25,A,T61,I20)") "NHC chain length:", scf_control%gce%chain_length
                   WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.6)") &
                      "NHC time constant [fs]:", cp_unit_from_cp2k(scf_control%gce%timecon, "fs")
+               CASE (gce_method_langevin)
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,A20)") "Electron-number potentiostat:", "LANGEVIN"
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.6)") &
+                     "Langevin friction [fs^-1]:", cp_unit_from_cp2k(scf_control%gce%langevin_gamma, "fs^-1")
                END SELECT
                IF (scf_control%gce%method /= gce_method_direct) THEN
                   WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.6)") &

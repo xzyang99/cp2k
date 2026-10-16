@@ -961,7 +961,8 @@ MODULE input_constants
 
    ! Define identifier codes for the grand canonical electron-number control
    INTEGER, PARAMETER, PUBLIC               :: gce_method_direct = 1, &
-                                               gce_method_nhc = 2
+                                               gce_method_nhc = 2, &
+                                               gce_method_langevin = 3
 
    ! Define identifier codes for mixing method
 
