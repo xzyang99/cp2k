@@ -17,7 +17,8 @@ MODULE qs_mo_occupation
    USE cp_control_types,                ONLY: hairy_probes_type
    USE cp_log_handling,                 ONLY: cp_to_string
    USE hairy_probes,                    ONLY: probe_occupancy
-   USE input_constants,                 ONLY: smear_energy_window,&
+   USE input_constants,                 ONLY: gce_method_direct,&
+                                              smear_energy_window,&
                                               smear_fermi_dirac,&
                                               smear_gaussian,&
                                               smear_list,&
@@ -105,9 +106,10 @@ CONTAINS
       ELSE
          do_gce = .FALSE.
       END IF
-      ! GCE starts from the reference electron number until the work function is known
+      ! GCE starts from the reference electron number until the work function is known,
+      ! and the dynamic potentiostats keep their electron number fixed during the SCF
       fixed_nelec = .NOT. do_gce
-      IF (do_gce) fixed_nelec = (gce%prev_workfunction < -500.0_dp)
+      IF (do_gce) fixed_nelec = (gce%method /= gce_method_direct .OR. gce%prev_workfunction < -500.0_dp)
 
       SELECT CASE (smear%method)
       CASE (smear_fermi_dirac)
@@ -145,12 +147,15 @@ CONTAINS
             END IF
          END DO
 
-         IF (do_gce) all_nelec = REAL(mo_array(1)%nelectron + mo_array(2)%nelectron, dp)
+         IF (do_gce) THEN
+            all_nelec = REAL(mo_array(1)%nelectron + mo_array(2)%nelectron, dp)
+            IF (gce%method /= gce_method_direct) all_nelec = gce%nelec
+         END IF
          CALL SmearFixed(all_occ, mu, kTS, all_eigval, all_nelec, &
                          smear_width, 1._dp, smear%method, xas_estate, occ_estate)
          IF (do_gce) THEN
-            ! As in set_mo_occupation_1, the first call precedes the reference potential
-            IF (gce%prev_workfunction < -1000.0_dp) THEN
+            ! As in set_mo_occupation_1, the first direct call precedes the reference potential
+            IF (gce%method == gce_method_direct .AND. gce%prev_workfunction < -1000.0_dp) THEN
                gce%prev_workfunction = -501.0_dp
             ELSE
                gce%prev_workfunction = gce%ref_esp - mu
@@ -540,7 +545,13 @@ CONTAINS
          IF (do_gce) THEN
             smear_width = smear%smearing_width
             IF (smear%method == smear_fermi_dirac) smear_width = smear%electronic_temperature
-            IF (gce%prev_workfunction < -1000.0_dp) THEN
+            IF (gce%method /= gce_method_direct) THEN
+               ! The dynamic GCE potentiostats keep the electron number fixed during the SCF
+               my_nelec = gce%nelec
+               CALL SmearFixed(mo_set%occupation_numbers, mo_set%mu, mo_set%kTS, mo_set%eigenvalues, my_nelec, &
+                               smear_width, mo_set%maxocc, smear%method)
+               gce%prev_workfunction = gce%ref_esp - mo_set%mu
+            ELSE IF (gce%prev_workfunction < -1000.0_dp) THEN
                my_nelec = REAL(mo_set%nelectron, dp)
                CALL SmearFixed(mo_set%occupation_numbers, mo_set%mu, mo_set%kTS, mo_set%eigenvalues, my_nelec, &
                                smear_width, mo_set%maxocc, smear%method)

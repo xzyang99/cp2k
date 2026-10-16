@@ -89,6 +89,8 @@ MODULE qs_scf
    USE cp_result_types,                 ONLY: cp_result_type
    USE dft_plus_u,                      ONLY: lowdin_kp_apply
    USE ec_env_types,                    ONLY: energy_correction_type
+   USE gce_potentiostat,                ONLY: gce_potentiostat_finish,&
+                                              gce_potentiostat_prepare
    USE input_constants,                 ONLY: &
         broyden_type_1, broyden_type_1_explicit, broyden_type_1_explicit_ls, broyden_type_1_ls, &
         broyden_type_2, broyden_type_2_explicit, broyden_type_2_explicit_ls, broyden_type_2_ls, &
@@ -319,6 +321,7 @@ CONTAINS
             scf_control%outer_scf%have_scf = .FALSE.
          END IF
 
+         CALL gce_potentiostat_prepare(qs_env)
          IF (.NOT. dft_control%qs_control%cdft) THEN
             CALL scf_env_do_scf(scf_env=scf_env, scf_control=scf_control, qs_env=qs_env, &
                                 converged=converged, should_stop=should_stop, total_scf_steps=tsteps)
@@ -327,6 +330,7 @@ CONTAINS
             CALL cdft_scf(qs_env=qs_env, should_stop=should_stop, &
                           has_converged=converged, total_scf_steps=tsteps)
          END IF
+         CALL gce_potentiostat_finish(qs_env)
 
          qs_env%scf_convergence_available = .TRUE.
          qs_env%scf_converged = converged

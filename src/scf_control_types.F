@@ -25,7 +25,8 @@ MODULE scf_control_types
    USE ieee_arithmetic,                 ONLY: ieee_is_finite
    USE input_constants,                 ONLY: &
         atomic_guess, diag_ot, diag_update_method_adiis, diag_update_method_mixing, direct_p_mix, &
-        external_density_guess, general_roks, high_spin_roks, no_guess, no_mix, &
+        external_density_guess, gce_method_direct, gce_method_nhc, &
+        general_roks, high_spin_roks, no_guess, no_mix, &
         ot_algo_taylor_or_diag, outer_scf_basis_center_opt, outer_scf_cdft_constraint, &
         outer_scf_ddapc_constraint, outer_scf_none, outer_scf_optimizer_bisect, &
         outer_scf_optimizer_broyden, outer_scf_optimizer_diis, outer_scf_optimizer_newton, &
@@ -158,15 +159,26 @@ MODULE scf_control_types
       REAL(KIND=dp), DIMENSION(0:2, 0:2, 1:2) :: roks_parameter = -1.0_dp
    END TYPE scf_control_type
 
-   ! A negative ref_position samples the reference potential at the upper cell boundary
+   ! A negative ref_position samples the reference potential at the upper cell boundary.
+   ! The dynamic methods treat the electron number nelec as a degree of freedom that is propagated
+   ! once per MD step; a negative nelec or last_time means that it has not been initialized yet.
    TYPE gce_type
       LOGICAL                               :: do_gce = .FALSE.
+      INTEGER                               :: method = gce_method_direct, &
+                                               chain_length = 1
       REAL(KIND=dp)                         :: target_workfunction = 0.16_dp, &
                                                ref_esp = 0.0_dp, &
                                                ref_position = -1.0_dp, &
                                                mixing_coef = 0.3_dp, &
                                                prev_workfunction = -1001.0_dp, &
-                                               nelec = 0.0_dp
+                                               nelec = -1.0_dp, &
+                                               electron_velocity = 0.0_dp, &
+                                               electron_mass = 0.0_dp, &
+                                               temperature = 0.0_dp, &
+                                               timecon = 0.0_dp, &
+                                               last_time = -1.0_dp, &
+                                               dt = 0.0_dp
+      REAL(KIND=dp), DIMENSION(:), ALLOCATABLE :: nhc_velocities
    END TYPE gce_type
 
 CONTAINS
@@ -325,6 +337,7 @@ CONTAINS
       END IF
 
       IF (ASSOCIATED(scf_control%gce)) THEN
+         IF (ALLOCATED(scf_control%gce%nhc_velocities)) DEALLOCATE (scf_control%gce%nhc_velocities)
          DEALLOCATE (scf_control%gce)
       END IF
 
@@ -665,6 +678,27 @@ CONTAINS
             CALL section_vals_val_get(gce_section, "REFERENCE_POSITION", r_val=gce%ref_position)
             IF (gce%ref_position < 0.0_dp) CPABORT("GCE%REFERENCE_POSITION must not be negative.")
          END IF
+
+         CALL section_vals_val_get(gce_section, "METHOD", i_val=gce%method)
+         IF (gce%method /= gce_method_direct) THEN
+            CALL section_vals_val_get(gce_section, "ELECTRON_MASS", r_val=gce%electron_mass)
+            CALL section_vals_val_get(gce_section, "TEMPERATURE", r_val=gce%temperature)
+            CALL section_vals_val_get(gce_section, "ELECTRON_NUMBER", r_val=gce%nelec)
+            CALL section_vals_val_get(gce_section, "ELECTRON_VELOCITY", r_val=gce%electron_velocity)
+            IF (gce%electron_mass <= 0.0_dp) CPABORT("GCE%ELECTRON_MASS must be positive.")
+            IF (gce%temperature < 0.0_dp) CPABORT("GCE%TEMPERATURE must not be negative.")
+         END IF
+
+         SELECT CASE (gce%method)
+         CASE (gce_method_nhc)
+            CALL section_vals_val_get(gce_section, "CHAIN_LENGTH", i_val=gce%chain_length)
+            CALL section_vals_val_get(gce_section, "TIMECON", r_val=gce%timecon)
+            IF (gce%chain_length < 1) CPABORT("GCE%CHAIN_LENGTH must be positive.")
+            IF (gce%temperature <= 0.0_dp .OR. gce%timecon <= 0.0_dp) &
+               CPABORT("GCE NOSE_HOOVER_CHAIN requires a positive TEMPERATURE and TIMECON.")
+            ALLOCATE (gce%nhc_velocities(gce%chain_length))
+            gce%nhc_velocities = 0.0_dp
+         END SELECT
       END IF ! do gce
    END SUBROUTINE read_gce_section
 
@@ -807,7 +841,20 @@ CONTAINS
                WRITE (UNIT=output_unit, FMT="(T25,A,/,T25,A,T61,F20.6)") &
                   REPEAT("-", 56), &
                   "Target workfunction [eV]:", scf_control%gce%target_workfunction*evolt
-               WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.1)") "Mixing coefficient:", scf_control%gce%mixing_coef
+               SELECT CASE (scf_control%gce%method)
+               CASE (gce_method_direct)
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.1)") "Mixing coefficient:", scf_control%gce%mixing_coef
+               CASE (gce_method_nhc)
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,A20)") "Electron-number potentiostat:", "NOSE_HOOVER_CHAIN"
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,I20)") "NHC chain length:", scf_control%gce%chain_length
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.6)") &
+                     "NHC time constant [fs]:", cp_unit_from_cp2k(scf_control%gce%timecon, "fs")
+               END SELECT
+               IF (scf_control%gce%method /= gce_method_direct) THEN
+                  WRITE (UNIT=output_unit, FMT="(T25,A,T61,F20.6)") &
+                     "Electron mass [eV*fs^2]:", cp_unit_from_cp2k(scf_control%gce%electron_mass, "eV*fs^2"), &
+                     "Potentiostat temperature [K]:", cp_unit_from_cp2k(scf_control%gce%temperature, "K")
+               END IF
                WRITE (UNIT=output_unit, FMT="(T25,A)") "Grand canonical SCF is activated."
             END IF
 

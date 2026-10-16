@@ -223,6 +223,7 @@ list(
   fp_types.F
   free_energy_types.F
   gce_methods.F
+  gce_potentiostat.F
   generic_os_integrals.F
   gle_system_types.F
   global_types.F

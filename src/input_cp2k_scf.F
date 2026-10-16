@@ -30,7 +30,8 @@ MODULE input_cp2k_scf
         cdft_magnetization_constraint, cholesky_dbcsr, cholesky_inverse, cholesky_off, &
         cholesky_reduce, cholesky_restore, core_guess, diag_block_davidson, diag_block_krylov, &
         diag_filter_matrix, diag_ot, diag_standard, diag_update_method_adiis, &
-        diag_update_method_mixing, eht_guess, external_density_guess, gaussian, general_roks, &
+        diag_update_method_mixing, eht_guess, external_density_guess, gaussian, &
+        gce_method_direct, gce_method_nhc, general_roks, &
         high_spin_roks, history_guess, jacobian_fd1, jacobian_fd1_backward, jacobian_fd1_central, &
         jacobian_fd2, jacobian_fd2_backward, ls_2pnt, ls_3pnt, ls_adapt, ls_gold, ls_none, &
         mopac_guess, no_guess, numerical, ot_algo_irac, ot_algo_taylor_or_diag, ot_chol_irac, &
@@ -2313,8 +2314,12 @@ CONTAINS
                           "counter charge screens the net charge of the DFT slab, so "// &
                           "that the work function can be obtained from the planar "// &
                           "averaged Hartree potential in the implicit solvent region "// &
-                          "or vacuum region. During the SCF iterations, the work "// &
-                          "function is mixed toward the target value. "// &
+                          "or vacuum region. With METHOD DIRECT, the work function is "// &
+                          "mixed toward the target value during the SCF iterations. The "// &
+                          "dynamic methods instead keep the electron number fixed in each "// &
+                          "SCF and propagate it once per MD step as a fictitious particle "// &
+                          "coupled to a thermostat, driven by the difference between the "// &
+                          "work function and its target. "// &
                           "The reported GCE charges during SCF iterations are the "// &
                           "current net charge of the DFT system excluding the planar "// &
                           "counter charge. A positive value means electron deficiency. "// &
@@ -2325,7 +2330,7 @@ CONTAINS
                           "total energy and the product of the target work function "// &
                           "and N_e^(abs,alpha).", &
                           citations=[Chai2024a], &
-                          n_keywords=4, &
+                          n_keywords=11, &
                           n_subsections=0, &
                           repeats=.FALSE.)
 
@@ -2377,6 +2382,66 @@ CONTAINS
                           type_of_var=real_t, &
                           unit_str="angstrom", &
                           usage="REFERENCE_POSITION 15.0")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="METHOD", &
+                          description="How the electron number is driven toward the target work function.", &
+                          enum_c_vals=s2a("DIRECT", "NOSE_HOOVER_CHAIN"), &
+                          enum_i_vals=[gce_method_direct, gce_method_nhc], &
+                          enum_desc=s2a("Mix the work function toward the target during the SCF", &
+                                        "Propagate the electron number once per MD step with a "// &
+                                        "Nose-Hoover chain thermostat"), &
+                          default_i_val=gce_method_direct, &
+                          usage="METHOD NOSE_HOOVER_CHAIN")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="ELECTRON_MASS", &
+                          description="Fictitious mass of the electron number for the dynamic methods.", &
+                          default_r_val=cp_unit_to_cp2k(660.74_dp, "eV*fs^2"), &
+                          unit_str="eV*fs^2", &
+                          usage="ELECTRON_MASS [eV*fs^2] 660.74")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="TEMPERATURE", &
+                          description="Temperature of the electron-number thermostat for the dynamic methods.", &
+                          default_r_val=cp_unit_to_cp2k(300.0_dp, "K"), &
+                          unit_str="K", &
+                          usage="TEMPERATURE [K] 300")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="CHAIN_LENGTH", &
+                          description="Length of the Nose-Hoover chain.", &
+                          default_i_val=1, &
+                          usage="CHAIN_LENGTH 1")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="TIMECON", &
+                          description="Time constant of the Nose-Hoover chain; the thermostat masses "// &
+                          "are TEMPERATURE*TIMECON^2.", &
+                          default_r_val=cp_unit_to_cp2k(9.015_dp, "fs"), &
+                          unit_str="fs", &
+                          usage="TIMECON [fs] 9.015")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="ELECTRON_NUMBER", &
+                          description="Initial electron number of the dynamic methods. A negative value "// &
+                          "takes the number defined by CHARGE.", &
+                          default_r_val=-1.0_dp, &
+                          usage="ELECTRON_NUMBER 60.0")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="ELECTRON_VELOCITY", &
+                          description="Initial rate of change of the electron number of the dynamic methods.", &
+                          default_r_val=0.0_dp, &
+                          unit_str="fs^-1", &
+                          usage="ELECTRON_VELOCITY [fs^-1] 0.0")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

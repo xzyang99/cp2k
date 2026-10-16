@@ -959,6 +959,10 @@ MODULE input_constants
    INTEGER, PARAMETER, PUBLIC               :: pcc_mode_double = 1, &
                                                pcc_mode_single = 2
 
+   ! Define identifier codes for the grand canonical electron-number control
+   INTEGER, PARAMETER, PUBLIC               :: gce_method_direct = 1, &
+                                               gce_method_nhc = 2
+
    ! Define identifier codes for mixing method
 
    INTEGER, PARAMETER, PUBLIC               :: no_mix = 0, &
