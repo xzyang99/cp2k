@@ -14,7 +14,8 @@ MODULE cp_control_types
                                               cp_fm_type
    USE eeq_input,                       ONLY: eeq_solver_type
    USE input_constants,                 ONLY: &
-        do_full_density, mtlr_initialization_unresolved, rtp_bse_ham_gw, rtp_method_tddft, &
+        do_full_density, mtlr_initialization_unresolved, pcc_mode_double, rtp_bse_ham_gw, &
+        rtp_method_tddft, &
         tblite_cli_born_kernel_auto, tblite_cli_solution_state_gsolv, tblite_cli_solvation_none, &
         tblite_guess_ceh, tblite_guess_sad, tblite_mixer_damping_default, &
         tblite_mixer_iterations_default, tblite_mixer_max_weight_default, &
@@ -650,8 +651,10 @@ MODULE cp_control_types
 ! \brief Control parameters for the planar counter charge density
 ! **************************************************************************************************
    TYPE pcc_control_type
-      INTEGER                              :: surf_normal = 0
+      INTEGER                              :: surf_normal = 0, &
+                                              mode = pcc_mode_double
       REAL(KIND=dp)                        :: dist_edge = 0.0_dp, &
+                                              plane_position = 0.0_dp, &
                                               gau_a = 0.0_dp, &
                                               gau_c = 0.0_dp, &
                                               charge = 0.0_dp

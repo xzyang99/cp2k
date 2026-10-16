@@ -10,6 +10,7 @@ MODULE surface_dipole
 
    USE cell_types,                      ONLY: cell_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE input_constants,                 ONLY: pcc_mode_single
    USE kahan_sum,                       ONLY: accurate_sum
    USE kinds,                           ONLY: dp
    USE mathconstants,                   ONLY: pi
@@ -49,16 +50,18 @@ CONTAINS
 !> \brief compute the surface dipole and the correction to the hartree potential
 !> \param qs_env the qs environment
 !> \param energy ...
+!> \param rho_tot_gspace total charge density including the planar counter charge
 !> \par History
 !>      01.2014 created [MI]
 !> \author MI
 !> \author Soumya Ghosh added SURF_DIP_POS 19.11.2018
 ! **************************************************************************************************
 
-   SUBROUTINE calc_dipsurf_potential(qs_env, energy)
+   SUBROUTINE calc_dipsurf_potential(qs_env, energy, rho_tot_gspace)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_energy_type), POINTER                      :: energy
+      TYPE(pw_c1d_gs_type), INTENT(IN)                   :: rho_tot_gspace
 
       CHARACTER(len=*), PARAMETER :: routineN = 'calc_dipsurf_potential'
 
@@ -67,6 +70,7 @@ CONTAINS
                                                             ispin, isurf, iup, jsurf, width
       INTEGER, DIMENSION(3)                              :: ngrid
       INTEGER, DIMENSION(:, :), POINTER                  :: bo
+      LOGICAL                                            :: single_pcc
       REAL(dp) :: cutoff, dh(3, 3), dip_fac, dip_hh, dsurf, height_min, hh, pos_surf_dip, &
          rhoav_min, surfarea, vac_above, vac_below, vdip, vdip_fac
       REAL(dp), ALLOCATABLE, DIMENSION(:)                :: rhoavsurf
@@ -102,7 +106,14 @@ CONTAINS
       CALL auxbas_pw_pool%create_pw(wf_r)
       CALL auxbas_pw_pool%create_pw(vdip_r)
 
-      IF (dft_control%qs_control%gapw) THEN
+      ! A single planar counter charge is part of the cell dipole, so the dipole is taken from
+      ! the total charge density that contains it
+      single_pcc = .FALSE.
+      IF (dft_control%do_pcc) single_pcc = (dft_control%pcc_control%mode == pcc_mode_single)
+
+      IF (single_pcc) THEN
+         CALL pw_transfer(rho_tot_gspace, wf_r)
+      ELSE IF (dft_control%qs_control%gapw) THEN
          IF (dft_control%qs_control%gapw_control%nopaw_as_gpw) THEN
             CALL pw_axpy(rho_core, rho0_s_gs)
             IF (ASSOCIATED(rhoz_cneo_s_gs)) THEN
@@ -125,10 +136,12 @@ CONTAINS
       ELSE
          CALL pw_transfer(rho_core, wf_r)
       END IF
-      CALL qs_rho_get(rho, rho_r=rho_r)
-      DO ispin = 1, dft_control%nspins
-         CALL pw_axpy(rho_r(ispin), wf_r)
-      END DO
+      IF (.NOT. single_pcc) THEN
+         CALL qs_rho_get(rho, rho_r=rho_r)
+         DO ispin = 1, dft_control%nspins
+            CALL pw_axpy(rho_r(ispin), wf_r)
+         END DO
+      END IF
 
       ngrid(1:3) = wf_r%pw_grid%npts(1:3)
       idir_surfdip = dft_control%dir_surf_dip

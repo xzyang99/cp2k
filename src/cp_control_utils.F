@@ -57,7 +57,8 @@ MODULE cp_control_utils
         do_se_is_slater, do_se_lr_ewald, do_se_lr_ewald_gks, do_se_lr_ewald_r3, do_se_lr_none, &
         gapw_1c_large, gapw_1c_medium, gapw_1c_orb, gapw_1c_small, gapw_1c_very_large, &
         gaussian_env, gfn1xtb, gfn_tblite, kg_tnadd_embed, kg_tnadd_embed_ri, no_admm_type, &
-        numerical, ramp_env, real_time_propagation, rtp_method_bse, rtp_method_bse_linearized, &
+        numerical, pcc_mode_double, pcc_mode_single, ramp_env, real_time_propagation, &
+        rtp_method_bse, rtp_method_bse_linearized, &
         sccs_andreussi, sccs_derivative_cd3, sccs_derivative_cd5, sccs_derivative_cd7, &
         sccs_derivative_fft, sccs_fattebert_gygi, sccs_saa_andreussi, sic_ad, sic_eo, &
         sic_list_all, sic_list_unpaired, sic_mauri_spz, sic_mauri_us, sic_none, slater, &
@@ -877,12 +878,38 @@ CONTAINS
                                    l_val=dft_control%do_pcc)
          IF (dft_control%do_pcc) THEN
             ALLOCATE (dft_control%pcc_control)
-            CALL section_vals_val_get(tmp_section, "DIST_EDGE", &
-                                      r_val=dft_control%pcc_control%dist_edge)
+            CALL section_vals_val_get(tmp_section, "MODE", &
+                                      i_val=dft_control%pcc_control%mode)
             CALL section_vals_val_get(tmp_section, "GAU_C", &
                                       r_val=dft_control%pcc_control%gau_c)
             CALL section_vals_val_get(tmp_section, "PARALLEL_PLANE", &
                                       i_val=dft_control%pcc_control%surf_normal)
+            IF (dft_control%pcc_control%gau_c <= 0.0_dp) THEN
+               CPABORT("PLANAR_COUNTER_CHARGE%GAU_C must be positive.")
+            END IF
+            SELECT CASE (dft_control%pcc_control%mode)
+            CASE (pcc_mode_double)
+               CALL section_vals_val_get(tmp_section, "PLANE_POSITION", explicit=explicit)
+               IF (explicit) CPABORT("PLANAR_COUNTER_CHARGE%PLANE_POSITION requires MODE SINGLE.")
+               CALL section_vals_val_get(tmp_section, "DIST_EDGE", &
+                                         r_val=dft_control%pcc_control%dist_edge)
+            CASE (pcc_mode_single)
+               CALL section_vals_val_get(tmp_section, "DIST_EDGE", explicit=explicit)
+               IF (explicit) CPABORT("PLANAR_COUNTER_CHARGE%DIST_EDGE requires MODE DOUBLE.")
+               CALL section_vals_val_get(tmp_section, "PLANE_POSITION", &
+                                         r_val=dft_control%pcc_control%plane_position)
+               ! The single plane leaves the cell with a net dipole, which only the surface
+               ! dipole correction along the same normal can compensate
+               IF (.NOT. dft_control%correct_surf_dip .OR. dft_control%switch_surf_dip .OR. &
+                   dft_control%dir_surf_dip /= dft_control%pcc_control%surf_normal) THEN
+                  CALL cp_abort(__LOCATION__, &
+                                "PLANAR_COUNTER_CHARGE MODE SINGLE requires SURFACE_DIPOLE_CORRECTION "// &
+                                "along the PARALLEL_PLANE normal and no SURF_DIP_SWITCH.")
+               END IF
+               IF (.NOT. ALL(cell%perd == 1)) THEN
+                  CPABORT("PLANAR_COUNTER_CHARGE MODE SINGLE requires a 3D periodic cell.")
+               END IF
+            END SELECT
          END IF
       END IF
 

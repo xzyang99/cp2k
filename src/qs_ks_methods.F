@@ -522,7 +522,7 @@ CONTAINS
 
       IF (dft_control%correct_surf_dip) THEN
          IF (dft_control%surf_dip_correct_switch) THEN
-            CALL calc_dipsurf_potential(qs_env, energy)
+            CALL calc_dipsurf_potential(qs_env, energy, rho_tot_gspace)
             energy%hartree = energy%hartree + energy%surf_dipole
          END IF
       END IF

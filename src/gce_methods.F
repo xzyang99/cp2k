@@ -13,6 +13,8 @@ MODULE gce_methods
 
    USE cp_control_types,                ONLY: dft_control_type,&
                                               pcc_control_type
+   USE input_constants,                 ONLY: pcc_mode_double,&
+                                              pcc_mode_single
    USE kinds,                           ONLY: dp
    USE message_passing,                 ONLY: mp_para_env_type
    USE pw_methods,                      ONLY: pw_axpy,&
@@ -196,7 +198,7 @@ CONTAINS
 
       INTEGER                                            :: a, b, c, handle, lcenter, ucenter, x, y, &
                                                             z
-      REAL(KIND=dp)                                      :: dz, gau_a, tot_charge, val
+      REAL(KIND=dp)                                      :: dist, dz, gau_a, length, tot_charge, val
       TYPE(pw_c1d_gs_type)                               :: pcc_density_g
       TYPE(pw_r3d_rs_type)                               :: pcc_density_r
 
@@ -216,15 +218,31 @@ CONTAINS
 
       dz = pcc_density_r%pw_grid%dr(c)
 
-      ucenter = pcc_density_r%pw_grid%bounds(2, c) - INT(pcc_env%dist_edge/dz)
-      lcenter = pcc_density_r%pw_grid%bounds(1, c) + INT(pcc_env%dist_edge/dz)
+      length = dz*REAL(pcc_density_r%pw_grid%npts(c), dp)
+
+      SELECT CASE (pcc_env%mode)
+      CASE (pcc_mode_double)
+         ucenter = pcc_density_r%pw_grid%bounds(2, c) - INT(pcc_env%dist_edge/dz)
+         lcenter = pcc_density_r%pw_grid%bounds(1, c) + INT(pcc_env%dist_edge/dz)
+      CASE (pcc_mode_single)
+         IF (pcc_env%plane_position < 0.0_dp .OR. pcc_env%plane_position >= length) &
+            CPABORT("PLANAR_COUNTER_CHARGE%PLANE_POSITION lies outside the cell.")
+         lcenter = pcc_density_r%pw_grid%bounds(1, c) + INT(pcc_env%plane_position/dz)
+      END SELECT
       gau_a = 1.0_dp
 !$OMP    PARALLEL DO DEFAULT(NONE) &
-!$OMP                PRIVATE(x,y,z,val) &
-!$OMP                SHARED(pcc_density_r,gau_a,ucenter,lcenter,A,b,c,dz,pcc_env)
+!$OMP                PRIVATE(dist,x,y,z,val) &
+!$OMP                SHARED(pcc_density_r,gau_a,ucenter,lcenter,length,A,b,c,dz,pcc_env)
       DO z = pcc_density_r%pw_grid%bounds_local(1, c), pcc_density_r%pw_grid%bounds_local(2, c)
-         val = gau_a*EXP(-(dz*REAL(z - ucenter, dp))**2.0_dp/(2.0_dp*pcc_env%gau_c**2.0_dp))
-         val = val + gau_a*EXP(-(dz*REAL(z - lcenter, dp))**2.0_dp/(2.0_dp*pcc_env%gau_c**2.0_dp))
+         IF (pcc_env%mode == pcc_mode_double) THEN
+            val = gau_a*EXP(-(dz*REAL(z - ucenter, dp))**2.0_dp/(2.0_dp*pcc_env%gau_c**2.0_dp))
+            val = val + gau_a*EXP(-(dz*REAL(z - lcenter, dp))**2.0_dp/(2.0_dp*pcc_env%gau_c**2.0_dp))
+         ELSE
+            ! minimum image distance, so that the single plane is periodic along the normal
+            dist = ABS(dz*REAL(z - lcenter, dp))
+            dist = MIN(dist, length - dist)
+            val = gau_a*EXP(-dist**2.0_dp/(2.0_dp*pcc_env%gau_c**2.0_dp))
+         END IF
          IF (val < 1.0E-15_dp) val = 0.0_dp
          DO y = pcc_density_r%pw_grid%bounds_local(1, b), pcc_density_r%pw_grid%bounds_local(2, b)
             DO x = pcc_density_r%pw_grid%bounds_local(1, a), pcc_density_r%pw_grid%bounds_local(2, a)

@@ -955,6 +955,10 @@ MODULE input_constants
                                                smear_mp = 5, &
                                                smear_mv = 6
 
+   ! Define identifier codes for the planar counter charge geometry
+   INTEGER, PARAMETER, PUBLIC               :: pcc_mode_double = 1, &
+                                               pcc_mode_single = 2
+
    ! Define identifier codes for mixing method
 
    INTEGER, PARAMETER, PUBLIC               :: no_mix = 0, &

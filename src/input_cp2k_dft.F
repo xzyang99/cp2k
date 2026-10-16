@@ -40,7 +40,8 @@ MODULE input_cp2k_dft
         do_admm_purify_none, do_admm_purify_none_dm, do_arnoldi, do_bch, do_cn, do_em, do_etrs, &
         do_exact, do_pade, do_taylor, ehrenfest, gaussian, kg_color_dsatur, kg_color_greedy, &
         kg_tnadd_atomic, kg_tnadd_embed, kg_tnadd_embed_ri, kg_tnadd_none, no_admm_type, &
-        numerical, plus_u_lowdin, plus_u_mulliken, plus_u_mulliken_charges, plus_u_tensorial, &
+        numerical, pcc_mode_double, pcc_mode_single, plus_u_lowdin, plus_u_mulliken, &
+        plus_u_mulliken_charges, plus_u_tensorial, &
         real_time_propagation, rel_dkh, rel_none, rel_pot_erfc, rel_pot_full, rel_sczora_mp, &
         rel_trans_atom, rel_trans_full, rel_trans_molecule, rel_zora, rel_zora_full, rel_zora_mp, &
         rtp_bse_ham_gw, rtp_bse_ham_ks, rtp_bse_kernel_ri_ao, rtp_bse_kernel_ri_default, &
@@ -2803,7 +2804,7 @@ CONTAINS
                           name="PLANAR_COUNTER_CHARGE", &
                           description="Define the parameters for the planar counter charge density", &
                           citations=[Chai2024a], &
-                          n_keywords=4, &
+                          n_keywords=6, &
                           n_subsections=0, &
                           repeats=.FALSE.)
 
@@ -2829,10 +2830,34 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+      CALL keyword_create(keyword, __LOCATION__, name="MODE", &
+                          description="Geometry of the planar counter charge.", &
+                          enum_c_vals=s2a("DOUBLE", "SINGLE"), &
+                          enum_i_vals=[pcc_mode_double, pcc_mode_single], &
+                          enum_desc=s2a("Two Gaussian planes at DIST_EDGE from the lower and upper "// &
+                                        "cell boundaries (symmetric slab)", &
+                                        "One Gaussian plane at PLANE_POSITION. The resulting cell dipole "// &
+                                        "is compensated by the surface dipole correction, which is "// &
+                                        "therefore required along the same normal."), &
+                          default_i_val=pcc_mode_double, &
+                          usage="MODE SINGLE")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="PLANE_POSITION", &
+                          description="Distance of the Gaussian center from the lower cell boundary "// &
+                          "along the surface normal. Only used with MODE SINGLE.", &
+                          usage="PLANE_POSITION 10.0", &
+                          unit_str="angstrom", &
+                          type_of_var=real_t)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
       CALL keyword_create(keyword, __LOCATION__, &
                           name="DIST_EDGE", &
                           description="Controls the distance between the center of the Gaussian "// &
-                          "and the cell boundary", &
+                          "and the cell boundary. Only used with MODE DOUBLE.", &
                           usage="DIST_EDGE 1.0", &
                           unit_str="angstrom", &
                           type_of_var=real_t)
