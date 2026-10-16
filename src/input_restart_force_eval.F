@@ -31,6 +31,8 @@ MODULE input_restart_force_eval
                                               use_qs_force
    USE input_constants,                 ONLY: do_coord_cp2k,&
                                               ehrenfest,&
+                                              gce_method_direct,&
+                                              gce_method_langevin,&
                                               mol_dyn_run,&
                                               mon_car_run,&
                                               pint_run,&
@@ -57,6 +59,8 @@ MODULE input_restart_force_eval
    USE particle_list_types,             ONLY: particle_list_type
    USE qmmm_ff_fist,                    ONLY: qmmm_ff_precond_only_qm
    USE qs_environment_types,            ONLY: get_qs_env
+   USE scf_control_types,               ONLY: gce_type,&
+                                              scf_control_type
    USE string_utilities,                ONLY: string_to_ascii
    USE virial_types,                    ONLY: virial_type
 #include "./base/base_uses.f90"
@@ -98,13 +102,15 @@ CONTAINS
       TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_subsys_type), POINTER                      :: subsys
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(scf_control_type), POINTER                    :: scf_control
       TYPE(section_vals_type), POINTER                   :: cell_section, dft_section, &
-                                                            force_env_sections, qmmm_section, &
-                                                            rng_section, subsys_section, &
-                                                            tmp_section
+                                                            force_env_sections, gce_section, &
+                                                            qmmm_section, rng_section, &
+                                                            subsys_section, tmp_section
       TYPE(virial_type), POINTER                         :: virial
 
       NULLIFY (rng_section, subsys_section, cell_section, virial, subsys, cell, dft_control, work, tmp_section)
+      NULLIFY (gce_section, scf_control)
       ! If it's not a dynamical run don't update the velocity section
       CALL section_vals_val_get(root_section, "GLOBAL%RUN_TYPE", i_val=myid)
       skip_vel_section = ((myid /= mol_dyn_run) .AND. &
@@ -156,6 +162,14 @@ CONTAINS
                work = dft_control%qs_control%cdft_control%strength
                CALL section_vals_val_set(dft_section, "QS%CDFT%STRENGTH", &
                                          r_vals_ptr=work)
+            END IF
+            ! State of a dynamic GCE potentiostat
+            CALL get_qs_env(force_env%qs_env, scf_control=scf_control)
+            IF (scf_control%gce%do_gce .AND. scf_control%gce%method /= gce_method_direct) THEN
+               dft_section => section_vals_get_subs_vals3(force_env_sections, "DFT", &
+                                                          i_rep_section=i_force_eval(iforce_eval))
+               gce_section => section_vals_get_subs_vals(dft_section, "SCF%GCE")
+               CALL update_gce_section(gce_section, scf_control%gce)
             END IF
          END IF
       END IF
@@ -912,5 +926,36 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE dump_coordinates_cp2k
+
+! **************************************************************************************************
+!> \brief Stores the state of a dynamic GCE potentiostat in the GCE section
+!> \param gce_section ...
+!> \param gce ...
+! **************************************************************************************************
+   SUBROUTINE update_gce_section(gce_section, gce)
+      TYPE(section_vals_type), POINTER                   :: gce_section
+      TYPE(gce_type), POINTER                            :: gce
+
+      CHARACTER(LEN=rng_record_length)                   :: rng_record
+      INTEGER, DIMENSION(rng_record_length, 1)           :: ascii
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: nhc_velocities
+      TYPE(section_vals_type), POINTER                   :: rng_section
+
+      CALL section_vals_val_set(gce_section, "ELECTRON_NUMBER", r_val=gce%nelec)
+      CALL section_vals_val_set(gce_section, "ELECTRON_VELOCITY", r_val=gce%electron_velocity)
+      CALL section_vals_val_set(gce_section, "LAST_TIME", r_val=gce%last_time)
+      IF (ALLOCATED(gce%nhc_velocities)) THEN
+         ALLOCATE (nhc_velocities(SIZE(gce%nhc_velocities)))
+         nhc_velocities(:) = gce%nhc_velocities
+         CALL section_vals_val_set(gce_section, "NHC_VELOCITIES", r_vals_ptr=nhc_velocities)
+      END IF
+      IF (gce%method == gce_method_langevin) THEN
+         CALL gce%rng%dump(rng_record)
+         CALL string_to_ascii(rng_record, ascii(:, 1))
+         rng_section => section_vals_get_subs_vals(gce_section, "RNG_INIT")
+         CALL section_rng_val_set(rng_section=rng_section, nsize=1, ascii=ascii)
+      END IF
+
+   END SUBROUTINE update_gce_section
 
 END MODULE input_restart_force_eval

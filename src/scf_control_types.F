@@ -51,7 +51,9 @@ MODULE scf_control_types
    USE outer_scf_control_types,         ONLY: outer_scf_control_type,&
                                               outer_scf_read_parameters
    USE parallel_rng_types,              ONLY: GAUSSIAN,&
-                                              rng_stream_type
+                                              rng_record_length,&
+                                              rng_stream_type,&
+                                              rng_stream_type_from_record
    USE physcon,                         ONLY: evolt
    USE qs_cdft_opt_types,               ONLY: cdft_opt_type_release
    USE qs_ot_types,                     ONLY: ot_readwrite_input,&
@@ -668,11 +670,14 @@ CONTAINS
       TYPE(gce_type), POINTER                            :: gce
       TYPE(section_vals_type), POINTER                   :: gce_section
 
+      CHARACTER(LEN=rng_record_length)                   :: rng_record
       INTEGER, DIMENSION(:), POINTER                     :: seed
       LOGICAL                                            :: explicit
       REAL(KIND=dp), DIMENSION(3, 2)                     :: initial_seed
+      REAL(KIND=dp), DIMENSION(:), POINTER               :: nhc_velocities
+      TYPE(section_vals_type), POINTER                   :: rng_section
 
-      NULLIFY (seed)
+      NULLIFY (nhc_velocities, rng_section, seed)
       CALL section_vals_val_get(gce_section, "_SECTION_PARAMETERS_", &
                                 l_val=gce%do_gce)
       IF (gce%do_gce) THEN
@@ -692,6 +697,7 @@ CONTAINS
             CALL section_vals_val_get(gce_section, "TEMPERATURE", r_val=gce%temperature)
             CALL section_vals_val_get(gce_section, "ELECTRON_NUMBER", r_val=gce%nelec)
             CALL section_vals_val_get(gce_section, "ELECTRON_VELOCITY", r_val=gce%electron_velocity)
+            CALL section_vals_val_get(gce_section, "LAST_TIME", r_val=gce%last_time)
             IF (gce%electron_mass <= 0.0_dp) CPABORT("GCE%ELECTRON_MASS must be positive.")
             IF (gce%temperature < 0.0_dp) CPABORT("GCE%TEMPERATURE must not be negative.")
          END IF
@@ -705,20 +711,34 @@ CONTAINS
                CPABORT("GCE NOSE_HOOVER_CHAIN requires a positive TEMPERATURE and TIMECON.")
             ALLOCATE (gce%nhc_velocities(gce%chain_length))
             gce%nhc_velocities = 0.0_dp
+            CALL section_vals_val_get(gce_section, "NHC_VELOCITIES", explicit=explicit)
+            IF (explicit) THEN
+               CALL section_vals_val_get(gce_section, "NHC_VELOCITIES", r_vals=nhc_velocities)
+               IF (SIZE(nhc_velocities) /= gce%chain_length) &
+                  CPABORT("GCE%NHC_VELOCITIES must have CHAIN_LENGTH entries.")
+               gce%nhc_velocities(:) = nhc_velocities
+            END IF
          CASE (gce_method_langevin)
             CALL section_vals_val_get(gce_section, "LANGEVIN_GAMMA", r_val=gce%langevin_gamma)
             IF (gce%langevin_gamma < 0.0_dp) CPABORT("GCE%LANGEVIN_GAMMA must not be negative.")
-            CALL section_vals_val_get(gce_section, "SEED", i_vals=seed)
-            SELECT CASE (SIZE(seed))
-            CASE (1)
-               initial_seed(:, :) = REAL(seed(1), KIND=dp)
-            CASE (6)
-               initial_seed(:, :) = RESHAPE(REAL(seed, KIND=dp), [3, 2])
-            CASE DEFAULT
-               CPABORT("GCE%SEED takes exactly 1 or 6 integers.")
-            END SELECT
-            gce%rng = rng_stream_type(name="GCE Langevin potentiostat", distribution_type=GAUSSIAN, &
-                                      seed=initial_seed, extended_precision=.TRUE.)
+            rng_section => section_vals_get_subs_vals(gce_section, "RNG_INIT")
+            CALL section_vals_get(rng_section, explicit=explicit)
+            IF (explicit) THEN
+               CALL section_vals_val_get(rng_section, "_DEFAULT_KEYWORD_", i_rep_val=1, c_val=rng_record)
+               gce%rng = rng_stream_type_from_record(rng_record)
+            ELSE
+               CALL section_vals_val_get(gce_section, "SEED", i_vals=seed)
+               SELECT CASE (SIZE(seed))
+               CASE (1)
+                  initial_seed(:, :) = REAL(seed(1), KIND=dp)
+               CASE (6)
+                  initial_seed(:, :) = RESHAPE(REAL(seed, KIND=dp), [3, 2])
+               CASE DEFAULT
+                  CPABORT("GCE%SEED takes exactly 1 or 6 integers.")
+               END SELECT
+               gce%rng = rng_stream_type(name="GCE Langevin potentiostat", distribution_type=GAUSSIAN, &
+                                         seed=initial_seed, extended_precision=.TRUE.)
+            END IF
          END SELECT
       END IF ! do gce
    END SUBROUTINE read_gce_section

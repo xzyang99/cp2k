@@ -53,6 +53,7 @@ MODULE input_cp2k_scf
    USE input_keyword_types,             ONLY: keyword_create,&
                                               keyword_release,&
                                               keyword_type
+   USE input_cp2k_subsys,               ONLY: create_rng_section
    USE input_section_types,             ONLY: section_add_keyword,&
                                               section_add_subsection,&
                                               section_create,&
@@ -2301,6 +2302,7 @@ CONTAINS
       TYPE(section_type), POINTER                        :: section
 
       TYPE(keyword_type), POINTER                        :: keyword
+      TYPE(section_type), POINTER                        :: subsection
 
       CPASSERT(.NOT. ASSOCIATED(section))
 
@@ -2330,11 +2332,11 @@ CONTAINS
                           "total energy and the product of the target work function "// &
                           "and N_e^(abs,alpha).", &
                           citations=[Chai2024a], &
-                          n_keywords=13, &
-                          n_subsections=0, &
+                          n_keywords=15, &
+                          n_subsections=1, &
                           repeats=.FALSE.)
 
-      NULLIFY (keyword)
+      NULLIFY (keyword, subsection)
 
       CALL keyword_create(keyword, __LOCATION__, &
                           name="_SECTION_PARAMETERS_", &
@@ -2440,7 +2442,8 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="SEED", &
-                          description="Seed of the Langevin random number stream, given as 1 or 6 integers.", &
+                          description="Seed of the Langevin random number stream, given as 1 or 6 integers. "// &
+                          "Ignored when RNG_INIT is present.", &
                           n_var=-1, &
                           type_of_var=integer_t, &
                           default_i_vals=[2000], &
@@ -2450,19 +2453,42 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="ELECTRON_NUMBER", &
                           description="Initial electron number of the dynamic methods. A negative value "// &
-                          "takes the number defined by CHARGE.", &
+                          "takes the number defined by CHARGE. Updated in restart files.", &
                           default_r_val=-1.0_dp, &
                           usage="ELECTRON_NUMBER 60.0")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="ELECTRON_VELOCITY", &
-                          description="Initial rate of change of the electron number of the dynamic methods.", &
+                          description="Initial rate of change of the electron number of the dynamic methods. "// &
+                          "Updated in restart files.", &
                           default_r_val=0.0_dp, &
                           unit_str="fs^-1", &
                           usage="ELECTRON_VELOCITY [fs^-1] 0.0")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="NHC_VELOCITIES", &
+                          description="Velocities of the Nose-Hoover chain thermostats. Updated in restart files.", &
+                          n_var=-1, &
+                          type_of_var=real_t, &
+                          unit_str="fs^-1", &
+                          usage="NHC_VELOCITIES 0.0")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="LAST_TIME", &
+                          description="MD time up to which the electron number has been propagated. "// &
+                          "Written to restart files; a negative value starts a new trajectory.", &
+                          default_r_val=-1.0_dp, &
+                          unit_str="fs", &
+                          usage="LAST_TIME [fs] 10.0")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL create_rng_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
 
    END SUBROUTINE create_gce_section
 
