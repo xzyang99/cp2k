@@ -2369,7 +2369,9 @@ CONTAINS
                           description="Distance from the lower cell boundary, along the normal of the "// &
                           "planar counter charge, of the layer whose planar-averaged electrostatic "// &
                           "potential is the reference of the work function. It should lie in the "// &
-                          "vacuum or solvent region. By default the upper cell boundary is used.", &
+                          "vacuum or solvent region. If the surface dipole correction acts along the "// &
+                          "same normal, its potential at this layer is included. By default the "// &
+                          "upper cell boundary is used.", &
                           repeats=.FALSE., &
                           n_var=1, &
                           type_of_var=real_t, &

@@ -10,6 +10,7 @@ MODULE surface_dipole
 
    USE cell_types,                      ONLY: cell_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE gce_methods,                     ONLY: gce_reference_layer
    USE input_constants,                 ONLY: pcc_mode_single
    USE kahan_sum,                       ONLY: accurate_sum
    USE kinds,                           ONLY: dp
@@ -34,6 +35,8 @@ MODULE surface_dipole
    USE qs_rho_types,                    ONLY: qs_rho_get,&
                                               qs_rho_type
    USE qs_subsys_types,                 ONLY: qs_subsys_type
+   USE scf_control_types,               ONLY: gce_type,&
+                                              scf_control_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -66,16 +69,17 @@ CONTAINS
       CHARACTER(len=*), PARAMETER :: routineN = 'calc_dipsurf_potential'
 
       INTEGER                                            :: handle, i, i_above, i_below, &
-                                                            idir_surfdip, ilayer_min, ilow, irho, &
-                                                            ispin, isurf, iup, jsurf, width
+                                                            idir_surfdip, ilayer_min, ilow, iref, &
+                                                            irho, ispin, isurf, iup, jsurf, width
       INTEGER, DIMENSION(3)                              :: ngrid
       INTEGER, DIMENSION(:, :), POINTER                  :: bo
-      LOGICAL                                            :: single_pcc
+      LOGICAL                                            :: gce_reference, single_pcc
       REAL(dp) :: cutoff, dh(3, 3), dip_fac, dip_hh, dsurf, height_min, hh, pos_surf_dip, &
          rhoav_min, surfarea, vac_above, vac_below, vdip, vdip_fac
       REAL(dp), ALLOCATABLE, DIMENSION(:)                :: rhoavsurf
       TYPE(cell_type), POINTER                           :: cell
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(gce_type), POINTER                            :: gce
       TYPE(pw_c1d_gs_type), POINTER                      :: rho0_s_gs, rho_core, rhoz_cneo_s_gs
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_p_type), DIMENSION(:), POINTER        :: pw_pools
@@ -85,10 +89,11 @@ CONTAINS
       TYPE(pw_r3d_rs_type), POINTER                      :: v_hartree_rspace
       TYPE(qs_rho_type), POINTER                         :: rho
       TYPE(qs_subsys_type), POINTER                      :: subsys
+      TYPE(scf_control_type), POINTER                    :: scf_control
 
       CALL timeset(routineN, handle)
       NULLIFY (cell, dft_control, rho, pw_env, auxbas_pw_pool, &
-               pw_pools, subsys, v_hartree_rspace, rho_r, rhoz_cneo_s_gs)
+               pw_pools, subsys, v_hartree_rspace, rho_r, rhoz_cneo_s_gs, scf_control)
 
       CALL get_qs_env(qs_env, &
                       dft_control=dft_control, &
@@ -99,7 +104,9 @@ CONTAINS
                       cell=cell, &
                       pw_env=pw_env, &
                       subsys=subsys, &
+                      scf_control=scf_control, &
                       v_hartree_rspace=v_hartree_rspace)
+      gce => scf_control%gce
 
       CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool, &
                       pw_pools=pw_pools)
@@ -248,6 +255,11 @@ CONTAINS
       qs_env%surface_dipole_moment = dip_hh/bohr
       qs_env%surface_dipole_ref_pos = height_min/bohr
 
+!    The GCE reference potential sampled along the same normal must include the dipole potential
+      gce_reference = .FALSE.
+      IF (gce%do_gce) gce_reference = (dft_control%pcc_control%surf_normal == idir_surfdip)
+      IF (gce_reference) iref = gce_reference_layer(wf_r%pw_grid, idir_surfdip, gce%ref_position)
+
 !    Calculation of the dipole potential as a function of the perpendicular coordinate
       CALL pw_zero(vdip_r)
       vdip_fac = dip_hh*4.0_dp*pi
@@ -268,6 +280,9 @@ CONTAINS
             cutoff = ABS(SIN(0.5_dp*pi*REAL(ABS(irho - ilayer_min), dp)/REAL(width, dp)))
          END IF
          vdip = vdip*cutoff
+         IF (gce_reference) THEN
+            IF (irho == iref) gce%ref_esp = gce%ref_esp + vdip/v_hartree_rspace%pw_grid%dvol
+         END IF
 
          IF (idir_surfdip == 3) THEN
             vdip_r%array(bo(1, 1):bo(2, 1), bo(1, 2):bo(2, 2), irho) = &
