@@ -2625,7 +2625,8 @@ CONTAINS
                                       cdft_loop_converged, exit_cdft_loop)
          CALL qs_scf_cdft_info(output_unit, scf_control, scf_env, cdft_control, &
                                energy, cdft_control%total_steps, &
-                               should_stop, cdft_loop_converged, cdft_loop=.TRUE.)
+                               should_stop, cdft_loop_converged, cdft_loop=.TRUE., &
+                               inner_loop_converged=converged)
          IF (exit_cdft_loop) EXIT cdft_outer_loop
          ! Check if the inverse Jacobian needs to be calculated
          CALL qs_calculate_inverse_jacobian(qs_env)
@@ -2638,6 +2639,7 @@ CONTAINS
       END DO cdft_outer_loop
 
       has_converged = converged .AND. cdft_loop_converged
+      IF (.NOT. (has_converged .OR. should_stop)) CPWARN("CDFT SCF loop NOT converged")
       cdft_control%ienergy = cdft_control%ienergy + 1
 
       ! Store needed arrays for ET coupling calculation

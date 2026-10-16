@@ -1101,12 +1101,13 @@ CONTAINS
 !> \param should_stop if the calculation should stop
 !> \param outer_loop_converged logical which determines if the CDFT SCF loop converged
 !> \param cdft_loop logical which determines a CDFT SCF loop is active
+!> \param inner_loop_converged whether the last inner SCF converged (default: true)
 !> \par History
 !>      12.2015 created [Nico Holmberg]
 ! **************************************************************************************************
    SUBROUTINE qs_scf_cdft_info(output_unit, scf_control, scf_env, cdft_control, &
                                energy, total_steps, should_stop, outer_loop_converged, &
-                               cdft_loop)
+                               cdft_loop, inner_loop_converged)
       INTEGER                                            :: output_unit
       TYPE(scf_control_type), POINTER                    :: scf_control
       TYPE(qs_scf_env_type), POINTER                     :: scf_env
@@ -1115,18 +1116,27 @@ CONTAINS
       INTEGER                                            :: total_steps
       LOGICAL, INTENT(IN)                                :: should_stop, outer_loop_converged, &
                                                             cdft_loop
+      LOGICAL, INTENT(IN), OPTIONAL                      :: inner_loop_converged
 
+      LOGICAL                                            :: inner_converged
       REAL(KIND=dp)                                      :: outer_loop_eps
+
+      inner_converged = .TRUE.
+      IF (PRESENT(inner_loop_converged)) inner_converged = inner_loop_converged
 
       IF (cdft_loop) THEN
          outer_loop_eps = SQRT(MAXVAL(scf_env%outer_scf%gradient(:, scf_env%outer_scf%iter_count)**2))
          IF (output_unit > 0) WRITE (output_unit, '(/,T3,A,I4,A,E10.2,A,F22.10)') &
             "CDFT SCF iter =  ", scf_env%outer_scf%iter_count, &
             " RMS gradient = ", outer_loop_eps, " energy =", energy%total
-         IF (outer_loop_converged) THEN
+         IF (outer_loop_converged .AND. inner_converged) THEN
             IF (output_unit > 0) WRITE (output_unit, '(T3,A,I4,A,I4,A,/)') &
                "CDFT SCF loop converged in", scf_env%outer_scf%iter_count, &
                " iterations or ", total_steps, " steps"
+         ELSE IF (outer_loop_converged) THEN
+            IF (output_unit > 0) WRITE (output_unit, '(T3,A,I4,A,/)') &
+               "CDFT constraint satisfied after ", scf_env%outer_scf%iter_count, &
+               " iterations, but the inner SCF did NOT converge"
          END IF
          IF ((scf_env%outer_scf%iter_count > scf_control%outer_scf%max_scf .OR. should_stop) &
              .AND. .NOT. outer_loop_converged) THEN
