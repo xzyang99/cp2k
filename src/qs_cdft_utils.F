@@ -212,8 +212,6 @@ CONTAINS
          build = .TRUE.
       END IF
       IF (becke_control%vector_buffer%store_vectors) THEN
-         ALLOCATE (becke_control%vector_buffer%distances(natom))
-         ALLOCATE (becke_control%vector_buffer%distance_vecs(3, natom))
          IF (in_memory) ALLOCATE (becke_control%vector_buffer%pair_dist_vecs(3, natom, natom))
          ALLOCATE (becke_control%vector_buffer%position_vecs(3, natom))
       END IF

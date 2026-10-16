@@ -64,10 +64,7 @@ MODULE qs_cdft_types
    TYPE becke_vector_buffer
       LOGICAL                              :: store_vectors = .FALSE.
       REAL(kind=dp), ALLOCATABLE, &
-         DIMENSION(:)                      :: distances
-      REAL(kind=dp), ALLOCATABLE, &
-         DIMENSION(:, :)                   :: distance_vecs, &
-                                              position_vecs, &
+         DIMENSION(:, :)                   :: position_vecs, &
                                               R12
       REAL(kind=dp), ALLOCATABLE, &
          DIMENSION(:, :, :)                :: pair_dist_vecs
@@ -190,10 +187,6 @@ MODULE qs_cdft_types
       INTEGER                              :: constraint_type = -1
       ! Is the constraint fragment based
       LOGICAL                              :: is_fragment_constraint = .FALSE.
-      ! Temporary array holding a component of the weight function gradient that only includes
-      ! terms defined on constraint atoms
-      REAL(kind=dp), ALLOCATABLE, &
-         DIMENSION(:, :)                   :: d_sum_const_dR
       ! Coefficients that determine how to sum up the atoms to form the constraint
       REAL(KIND=dp), POINTER, DIMENSION(:) :: coeff => NULL()
       ! Result of integration dw/dR * rho_r dr where dw/dR is the weight function gradient
@@ -315,12 +308,6 @@ CONTAINS
       TYPE(becke_constraint_type), INTENT(INOUT)         :: becke_control
 
       IF (becke_control%vector_buffer%store_vectors) THEN
-         IF (ALLOCATED(becke_control%vector_buffer%distances)) THEN
-            DEALLOCATE (becke_control%vector_buffer%distances)
-         END IF
-         IF (ALLOCATED(becke_control%vector_buffer%distance_vecs)) THEN
-            DEALLOCATE (becke_control%vector_buffer%distance_vecs)
-         END IF
          IF (ALLOCATED(becke_control%vector_buffer%position_vecs)) THEN
             DEALLOCATE (becke_control%vector_buffer%position_vecs)
          END IF
@@ -479,9 +466,6 @@ CONTAINS
             END IF
             IF (ASSOCIATED(cdft_control%group(i)%coeff)) THEN
                DEALLOCATE (cdft_control%group(i)%coeff)
-            END IF
-            IF (ALLOCATED(cdft_control%group(i)%d_sum_const_dR)) THEN
-               DEALLOCATE (cdft_control%group(i)%d_sum_const_dR)
             END IF
             IF (cdft_control%type == outer_scf_becke_constraint) THEN
                IF (ASSOCIATED(cdft_control%group(i)%gradients)) THEN

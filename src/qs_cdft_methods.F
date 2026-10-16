@@ -141,8 +141,8 @@ CONTAINS
       CHARACTER(len=*), PARAMETER :: routineN = 'becke_constraint_low'
       REAL(KIND=dp), PARAMETER :: eps_sum_cell_f_all = 1.0E-06_dp
 
-      INTEGER                                            :: handle, i, iatom, igroup, ind(3), ip, j, &
-                                                            jatom, jp, k, natom, np(3)
+      INTEGER                                            :: handle, i, iatom, igroup, ip, j, jatom, &
+                                                            jp, k, natom, ngroup, np(3)
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: catom
       INTEGER, DIMENSION(2, 3)                           :: bo, bo_conf
       LOGICAL                                            :: in_memory, my_just_gradients, skip_point
@@ -151,13 +151,15 @@ CONTAINS
       REAL(kind=dp)                                      :: dist1, dist2, dmyexp, dvol, eps_cavity, &
                                                             my1, my1_homo, myexp, sum_cell_f_all, &
                                                             th, tmp_const
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: cell_functions, ds_dR_i, ds_dR_j, &
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: cell_functions, distances, &
                                                             sum_cell_f_group
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :)        :: catom_pos, d_sum_Pm_dR, dP_i_dRi
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: dP_i_dRj
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :)        :: catom_pos, d_sum_Pm_dR, dP_i_dRi, &
+                                                            distance_vecs
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: d_sum_const_dR, dP_i_dRj
       REAL(kind=dp), DIMENSION(3)                        :: cell_v, dist_vec, dmy_dR_i, dmy_dR_j, &
                                                             dr, dr1_r2, dr_i_dR, dr_ij_dR, &
-                                                            dr_j_dR, grid_p, r, r1, shift
+                                                            dr_j_dR, ds_dR_i, ds_dR_j, grid_p, r, &
+                                                            r1, shift
       REAL(KIND=dp), DIMENSION(:), POINTER               :: cutoffs
       TYPE(becke_constraint_type), POINTER               :: becke_control
       TYPE(cdft_control_type), POINTER                   :: cdft_control
@@ -194,8 +196,6 @@ CONTAINS
          in_memory = .TRUE.
          !  Pairwise distances need to be recalculated
          IF (becke_control%vector_buffer%store_vectors) THEN
-            ALLOCATE (becke_control%vector_buffer%distances(natom))
-            ALLOCATE (becke_control%vector_buffer%distance_vecs(3, natom))
             IF (in_memory) ALLOCATE (becke_control%vector_buffer%pair_dist_vecs(3, natom, natom))
             ALLOCATE (becke_control%vector_buffer%position_vecs(3, natom))
          END IF
@@ -232,10 +232,6 @@ CONTAINS
          ALLOCATE (is_constraint(natom))
          is_constraint = .FALSE.
       END IF
-      ! This boolean is needed to prevent calculation of atom pairs ji when the pair ij has
-      ! already been calculated (data for pair ji is set using symmetry)
-      ! With gradient precomputation, symmetry exploited for both weight function and gradients
-      ALLOCATE (skip_me(natom))
       DO i = 1, cdft_control%natoms
          catom(i) = cdft_control%atoms(i)
          ! Notice that here is_constraint=.TRUE. also for dummy atoms to properly compute their Becke charges
@@ -254,6 +250,7 @@ CONTAINS
       DO i = 1, 3
          cell_v(i) = cell%hmat(i, i)
       END DO
+      ngroup = SIZE(group)
       ! Positions of the constraint atoms, folded into the cell as for all other atoms below
       ALLOCATE (catom_pos(3, cdft_control%natoms))
       DO ip = 1, cdft_control%natoms
@@ -279,25 +276,35 @@ CONTAINS
                                               bo_conf(1, 2):bo_conf(2, 2), &
                                               bo_conf(1, 3):bo_conf(2, 3)))
             group(igroup)%gradients = 0.0_dp
-            ALLOCATE (group(igroup)%d_sum_const_dR(3, natom))
-            group(igroup)%d_sum_const_dR = 0.0_dp
             DO ip = 1, SIZE(group(igroup)%atoms)
                atom_in_group(igroup, group(igroup)%atoms(ip)) = .TRUE.
             END DO
          END DO
       END IF
-      ! Allocate remaining work
-      ALLOCATE (sum_cell_f_group(SIZE(group)))
-      ALLOCATE (cell_functions(natom))
-      IF (in_memory) THEN
-         ALLOCATE (ds_dR_j(3))
-         ALLOCATE (ds_dR_i(3))
-         ALLOCATE (d_sum_Pm_dR(3, natom))
-         ALLOCATE (dP_i_dRj(3, natom, natom))
-         ALLOCATE (dP_i_dRi(3, natom))
-         th = 1.0e-8_dp
+      IF (in_memory) th = 1.0e-8_dp
+      ! Build constraint. Grid points are independent: each thread uses its own work arrays and
+      ! writes only to its own grid points.
+!$OMP PARALLEL DEFAULT(NONE) &
+!$OMP          SHARED(atom_in_group, becke_control, bo, catom, catom_pos, cdft_control, cell, cell_v, &
+!$OMP                 charge, cutoffs, dr, eps_cavity, group, in_memory, is_constraint, &
+!$OMP                 my_just_gradients, natom, ngroup, particle_set, shift, th) &
+!$OMP          PRIVATE(cell_functions, d_sum_const_dR, d_sum_Pm_dR, dist1, dist2, dist_vec, distance_vecs, &
+!$OMP                  distances, dmy_dR_i, dmy_dR_j, dmyexp, dP_i_dRi, dP_i_dRj, dr1_r2, dr_i_dR, &
+!$OMP                  dr_ij_dR, dr_j_dR, ds_dR_i, ds_dR_j, grid_p, i, iatom, igroup, ip, j, jatom, jp, &
+!$OMP                  k, my1, my1_homo, myexp, r, r1, skip_me, skip_point, sum_cell_f_all, &
+!$OMP                  sum_cell_f_group, tmp_const)
+      ! skip_me prevents the calculation of atom pairs ji when the pair ij has already been
+      ! calculated (data for pair ji is set using symmetry)
+      ! With gradient precomputation, symmetry exploited for both weight function and gradients
+      ALLOCATE (skip_me(natom), cell_functions(natom), sum_cell_f_group(ngroup))
+      IF (becke_control%vector_buffer%store_vectors) THEN
+         ALLOCATE (distances(natom), distance_vecs(3, natom))
       END IF
-      ! Build constraint
+      IF (in_memory) THEN
+         ALLOCATE (d_sum_Pm_dR(3, natom), d_sum_const_dR(3, natom, ngroup))
+         ALLOCATE (dP_i_dRj(3, natom, natom), dP_i_dRi(3, natom))
+      END IF
+!$OMP DO COLLAPSE(2) SCHEDULE(DYNAMIC)
       DO k = bo(1, 1), bo(2, 1)
          DO j = bo(1, 2), bo(2, 2)
             DO i = bo(1, 3), bo(2, 3)
@@ -306,7 +313,6 @@ CONTAINS
                IF (becke_control%cavity_confine) THEN
                   IF (becke_control%cavity%array(k, j, i) < eps_cavity) CYCLE
                END IF
-               ind = [k, j, i]
                grid_p(1) = k*dr(1) + shift(1)
                grid_p(2) = j*dr(2) + shift(2)
                grid_p(3) = i*dr(3) + shift(3)
@@ -328,12 +334,10 @@ CONTAINS
                END IF
                cell_functions = 1.0_dp
                skip_me = .FALSE.
-               IF (becke_control%vector_buffer%store_vectors) becke_control%vector_buffer%distances = 0.0_dp
+               IF (becke_control%vector_buffer%store_vectors) distances = 0.0_dp
                IF (in_memory) THEN
                   d_sum_Pm_dR = 0.0_dp
-                  DO igroup = 1, SIZE(group)
-                     group(igroup)%d_sum_const_dR = 0.0_dp
-                  END DO
+                  d_sum_const_dR = 0.0_dp
                   dP_i_dRi = 0.0_dp
                END IF
                ! Iterate over all atoms in the system
@@ -343,15 +347,15 @@ CONTAINS
                      CYCLE
                   END IF
                   IF (becke_control%vector_buffer%store_vectors) THEN
-                     IF (becke_control%vector_buffer%distances(iatom) == 0.0_dp) THEN
+                     IF (distances(iatom) == 0.0_dp) THEN
                         r = becke_control%vector_buffer%position_vecs(:, iatom)
                         dist_vec = (r - grid_p) - ANINT((r - grid_p)/cell_v)*cell_v
                         dist1 = NORM2(dist_vec)
-                        becke_control%vector_buffer%distance_vecs(:, iatom) = dist_vec
-                        becke_control%vector_buffer%distances(iatom) = dist1
+                        distance_vecs(:, iatom) = dist_vec
+                        distances(iatom) = dist1
                      ELSE
-                        dist_vec = becke_control%vector_buffer%distance_vecs(:, iatom)
-                        dist1 = becke_control%vector_buffer%distances(iatom)
+                        dist_vec = distance_vecs(:, iatom)
+                        dist1 = distances(iatom)
                      END IF
                   ELSE
                      r = particle_set(iatom)%r
@@ -377,15 +381,15 @@ CONTAINS
                               IF (.NOT. skip_me(jatom)) CYCLE
                            END IF
                            IF (becke_control%vector_buffer%store_vectors) THEN
-                              IF (becke_control%vector_buffer%distances(jatom) == 0.0_dp) THEN
+                              IF (distances(jatom) == 0.0_dp) THEN
                                  r1 = becke_control%vector_buffer%position_vecs(:, jatom)
                                  dist_vec = (r1 - grid_p) - ANINT((r1 - grid_p)/cell_v)*cell_v
                                  dist2 = NORM2(dist_vec)
-                                 becke_control%vector_buffer%distance_vecs(:, jatom) = dist_vec
-                                 becke_control%vector_buffer%distances(jatom) = dist2
+                                 distance_vecs(:, jatom) = dist_vec
+                                 distances(jatom) = dist2
                               ELSE
-                                 dist_vec = becke_control%vector_buffer%distance_vecs(:, jatom)
-                                 dist2 = becke_control%vector_buffer%distances(jatom)
+                                 dist_vec = distance_vecs(:, jatom)
+                                 dist2 = distances(jatom)
                               END IF
                            ELSE
                               r1 = particle_set(jatom)%r
@@ -478,8 +482,8 @@ CONTAINS
                                     EXIT
                                  END IF
                               END DO
-                              group(igroup)%d_sum_const_dR(1:3, iatom) = group(igroup)%d_sum_const_dR(1:3, iatom) + &
-                                                                         group(igroup)%coeff(ip)*dP_i_dRi(:, iatom)
+                              d_sum_const_dR(1:3, iatom, igroup) = d_sum_const_dR(1:3, iatom, igroup) + &
+                                                                   group(igroup)%coeff(ip)*dP_i_dRi(:, iatom)
                            END DO
                         END IF
                         DO jatom = 1, natom
@@ -498,9 +502,9 @@ CONTAINS
                                           EXIT
                                        END IF
                                     END DO
-                                    group(igroup)%d_sum_const_dR(1:3, jatom) = group(igroup)%d_sum_const_dR(1:3, jatom) + &
-                                                                               group(igroup)%coeff(ip)* &
-                                                                               dP_i_dRj(:, iatom, jatom)
+                                    d_sum_const_dR(1:3, jatom, igroup) = d_sum_const_dR(1:3, jatom, igroup) + &
+                                                                         group(igroup)%coeff(ip)* &
+                                                                         dP_i_dRj(:, iatom, jatom)
                                  END DO
                               END IF
                            END IF
@@ -528,7 +532,7 @@ CONTAINS
                   DO igroup = 1, SIZE(group)
                      DO iatom = 1, natom
                         group(igroup)%gradients(3*(iatom - 1) + 1:3*(iatom - 1) + 3, k, j, i) = &
-                           group(igroup)%d_sum_const_dR(1:3, iatom)/sum_cell_f_all - sum_cell_f_group(igroup)* &
+                           d_sum_const_dR(1:3, iatom, igroup)/sum_cell_f_all - sum_cell_f_group(igroup)* &
                            d_sum_Pm_dR(1:3, iatom)/(sum_cell_f_all**2)
                      END DO
                   END DO
@@ -547,16 +551,13 @@ CONTAINS
             END DO
          END DO
       END DO
+!$OMP END DO
+      DEALLOCATE (skip_me, cell_functions, sum_cell_f_group)
+      IF (ALLOCATED(distances)) DEALLOCATE (distances, distance_vecs)
+      IF (in_memory) DEALLOCATE (d_sum_Pm_dR, d_sum_const_dR, dP_i_dRj, dP_i_dRi)
+!$OMP END PARALLEL
       ! Release storage
       IF (in_memory) THEN
-         DEALLOCATE (ds_dR_j)
-         DEALLOCATE (ds_dR_i)
-         DEALLOCATE (d_sum_Pm_dR)
-         DEALLOCATE (dP_i_dRj)
-         DEALLOCATE (dP_i_dRi)
-         DO igroup = 1, SIZE(group)
-            DEALLOCATE (group(igroup)%d_sum_const_dR)
-         END DO
          DEALLOCATE (atom_in_group)
          IF (becke_control%vector_buffer%store_vectors) THEN
             DEALLOCATE (becke_control%vector_buffer%pair_dist_vecs)
@@ -567,13 +568,8 @@ CONTAINS
          DEALLOCATE (is_constraint)
       END IF
       DEALLOCATE (catom, catom_pos)
-      DEALLOCATE (cell_functions)
-      DEALLOCATE (skip_me)
-      DEALLOCATE (sum_cell_f_group)
       DEALLOCATE (becke_control%vector_buffer%R12)
       IF (becke_control%vector_buffer%store_vectors) THEN
-         DEALLOCATE (becke_control%vector_buffer%distances)
-         DEALLOCATE (becke_control%vector_buffer%distance_vecs)
          DEALLOCATE (becke_control%vector_buffer%position_vecs)
       END IF
       CALL timestop(handle)
