@@ -223,7 +223,7 @@ CONTAINS
          ilayer_min = ilow - 1 + NINT(pos_surf_dip/dh(idir_surfdip, idir_surfdip)) + 1
       END IF
       rhoav_min = ABS(rhoavsurf(ilayer_min))
-      IF (rhoav_min >= 1.E-5_dp) THEN
+      IF (rhoav_min >= 5.0E-4_dp) THEN
          CPABORT(" Dipole correction needs more vacuum space above the surface ")
       END IF
 
