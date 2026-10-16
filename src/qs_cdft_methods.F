@@ -142,10 +142,10 @@ CONTAINS
       REAL(KIND=dp), PARAMETER :: eps_sum_cell_f_all = 1.0E-06_dp
 
       INTEGER                                            :: handle, i, iatom, igroup, ind(3), ip, j, &
-                                                            jatom, jp, k, natom, np(3), nskipped
+                                                            jatom, jp, k, natom, np(3)
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: catom
       INTEGER, DIMENSION(2, 3)                           :: bo, bo_conf
-      LOGICAL                                            :: in_memory, my_just_gradients
+      LOGICAL                                            :: in_memory, my_just_gradients, skip_point
       LOGICAL, ALLOCATABLE, DIMENSION(:)                 :: is_constraint, skip_me
       LOGICAL, ALLOCATABLE, DIMENSION(:, :)              :: atom_in_group
       REAL(kind=dp)                                      :: dist1, dist2, dmyexp, dvol, eps_cavity, &
@@ -153,7 +153,7 @@ CONTAINS
                                                             th, tmp_const
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: cell_functions, ds_dR_i, ds_dR_j, &
                                                             sum_cell_f_group
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :)        :: d_sum_Pm_dR, dP_i_dRi
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :)        :: catom_pos, d_sum_Pm_dR, dP_i_dRi
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: dP_i_dRj
       REAL(kind=dp), DIMENSION(3)                        :: cell_v, dist_vec, dmy_dR_i, dmy_dR_j, &
                                                             dr, dr1_r2, dr_i_dR, dr_ij_dR, &
@@ -254,6 +254,15 @@ CONTAINS
       DO i = 1, 3
          cell_v(i) = cell%hmat(i, i)
       END DO
+      ! Positions of the constraint atoms, folded into the cell as for all other atoms below
+      ALLOCATE (catom_pos(3, cdft_control%natoms))
+      DO ip = 1, cdft_control%natoms
+         r = particle_set(catom(ip))%r
+         DO i = 1, 3
+            r(i) = MODULO(r(i), cell%hmat(i, i)) - cell%hmat(i, i)/2._dp
+         END DO
+         catom_pos(:, ip) = r
+      END DO
       ! If requested, allocate storage for gradients
       IF (in_memory) THEN
          bo_conf = bo
@@ -301,7 +310,22 @@ CONTAINS
                grid_p(1) = k*dr(1) + shift(1)
                grid_p(2) = j*dr(2) + shift(2)
                grid_p(3) = i*dr(3) + shift(3)
-               nskipped = 0
+               ! With SHOULD_SKIP, the weight and its gradients vanish beyond the cutoffs of all
+               ! constraint atoms, so such points are skipped before the loop over atom pairs
+               IF (becke_control%should_skip) THEN
+                  skip_point = .TRUE.
+                  DO ip = 1, cdft_control%natoms
+                     dist_vec = (catom_pos(:, ip) - grid_p) - ANINT((catom_pos(:, ip) - grid_p)/cell_v)*cell_v
+                     IF (NORM2(dist_vec) <= cutoffs(catom(ip))) THEN
+                        skip_point = .FALSE.
+                        EXIT
+                     END IF
+                  END DO
+                  IF (skip_point) THEN
+                     IF (in_memory .AND. becke_control%cavity_confine) becke_control%cavity%array(k, j, i) = 0.0_dp
+                     CYCLE
+                  END IF
+               END IF
                cell_functions = 1.0_dp
                skip_me = .FALSE.
                IF (becke_control%vector_buffer%store_vectors) becke_control%vector_buffer%distances = 0.0_dp
@@ -316,17 +340,6 @@ CONTAINS
                DO iatom = 1, natom
                   IF (skip_me(iatom)) THEN
                      cell_functions(iatom) = 0.0_dp
-                     IF (becke_control%should_skip) THEN
-                        IF (is_constraint(iatom)) nskipped = nskipped + 1
-                        IF (nskipped == cdft_control%natoms) THEN
-                           IF (in_memory) THEN
-                              IF (becke_control%cavity_confine) THEN
-                                 becke_control%cavity%array(k, j, i) = 0.0_dp
-                              END IF
-                           END IF
-                           EXIT
-                        END IF
-                     END IF
                      CYCLE
                   END IF
                   IF (becke_control%vector_buffer%store_vectors) THEN
@@ -496,20 +509,8 @@ CONTAINS
                   ELSE
                      cell_functions(iatom) = 0.0_dp
                      skip_me(iatom) = .TRUE.
-                     IF (becke_control%should_skip) THEN
-                        IF (is_constraint(iatom)) nskipped = nskipped + 1
-                        IF (nskipped == cdft_control%natoms) THEN
-                           IF (in_memory) THEN
-                              IF (becke_control%cavity_confine) THEN
-                                 becke_control%cavity%array(k, j, i) = 0.0_dp
-                              END IF
-                           END IF
-                           EXIT
-                        END IF
-                     END IF
                   END IF
                END DO !iatom
-               IF (nskipped == cdft_control%natoms) CYCLE
                ! Sum up cell functions
                sum_cell_f_group = 0.0_dp
                DO igroup = 1, SIZE(group)
@@ -565,7 +566,7 @@ CONTAINS
       IF (ALLOCATED(is_constraint)) THEN
          DEALLOCATE (is_constraint)
       END IF
-      DEALLOCATE (catom)
+      DEALLOCATE (catom, catom_pos)
       DEALLOCATE (cell_functions)
       DEALLOCATE (skip_me)
       DEALLOCATE (sum_cell_f_group)
