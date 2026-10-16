@@ -22,9 +22,11 @@ MODULE gce_methods
                                               pw_scale,&
                                               pw_transfer,&
                                               pw_zero
+   USE pw_grid_types,                   ONLY: pw_grid_type
    USE pw_pool_types,                   ONLY: pw_pool_type
    USE pw_types,                        ONLY: pw_c1d_gs_type,&
                                               pw_r3d_rs_type
+   USE scf_control_types,               ONLY: gce_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -33,7 +35,7 @@ MODULE gce_methods
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'gce_methods'
 
-   PUBLIC :: planar_averaged_v_hartree_3d, planar_counter_charge
+   PUBLIC :: gce_reference_layer, planar_averaged_v_hartree_3d, planar_counter_charge
 
 CONTAINS
 
@@ -70,49 +72,72 @@ CONTAINS
    END SUBROUTINE get_planar_axes
 
 ! **************************************************************************************************
+!> \brief grid layer along the surface normal at which the GCE reference potential is sampled
+!> \param pw_grid real-space grid
+!> \param c index of the surface normal
+!> \param ref_position distance from the lower cell boundary; negative selects the upper cell boundary
+!> \return index of the reference layer
+! **************************************************************************************************
+   FUNCTION gce_reference_layer(pw_grid, c, ref_position) RESULT(iref)
+
+      TYPE(pw_grid_type), INTENT(IN)                     :: pw_grid
+      INTEGER, INTENT(IN)                                :: c
+      REAL(KIND=dp), INTENT(IN)                          :: ref_position
+      INTEGER                                            :: iref
+
+      IF (ref_position < 0.0_dp) THEN
+         iref = pw_grid%bounds(2, c)
+      ELSE
+         IF (ref_position >= pw_grid%dr(c)*REAL(pw_grid%npts(c), dp)) &
+            CPABORT("GCE%REFERENCE_POSITION lies outside the cell.")
+         iref = pw_grid%bounds(1, c) + MODULO(NINT(ref_position/pw_grid%dr(c)), pw_grid%npts(c))
+      END IF
+
+   END FUNCTION gce_reference_layer
+
+! **************************************************************************************************
 !> \brief calculate the planar averaged real space potential (e.g. Hartree potential) along the
 !>        surface normal of a slab model and the corresponding reference (electrostatic) energy
-!>        near the simulation cell edge.
+!>        at the GCE reference layer.
 !> \param v_rspace ...
 !> \param dft_control ...
-!> \param do_gce ...
-!> \param ref_esp ...
+!> \param gce ...
 !> \param para_env ...
 !> \author Ziwei Chai
 ! **************************************************************************************************
-   SUBROUTINE planar_averaged_v_hartree_3d(v_rspace, dft_control, do_gce, ref_esp, para_env)
+   SUBROUTINE planar_averaged_v_hartree_3d(v_rspace, dft_control, gce, para_env)
 
       TYPE(pw_r3d_rs_type), INTENT(IN)                   :: v_rspace
       TYPE(dft_control_type), POINTER                    :: dft_control
-      LOGICAL, INTENT(IN)                                :: do_gce
-      REAL(KIND=dp), INTENT(INOUT)                       :: ref_esp
+      TYPE(gce_type), POINTER                            :: gce
       TYPE(mp_para_env_type), POINTER                    :: para_env
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'planar_averaged_v_hartree_3d'
 
-      INTEGER                                            :: a, b, c, handle, x, y, z
+      INTEGER                                            :: a, b, c, handle, iref, x, y, z
       REAL(KIND=dp)                                      :: my_ref_esp, ngrids_in_plane
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: profile, profile_local
 
       CALL timeset(routineN, handle)
 
-      IF (do_gce) THEN
+      IF (gce%do_gce) THEN
 
          ! a and b cell vectors are parallel to the surface, c vector is not.
          CALL get_planar_axes(dft_control%pcc_control%surf_normal, a, b, c)
 
+         iref = gce_reference_layer(v_rspace%pw_grid, c, gce%ref_position)
          my_ref_esp = 0.0_dp
          z = v_rspace%pw_grid%npts(a)*v_rspace%pw_grid%npts(b)
          ngrids_in_plane = REAL(z, dp)
 
 !$OMP    PARALLEL DO DEFAULT(NONE) &
 !$OMP                PRIVATE(x,y,z) &
-!$OMP                SHARED(v_rspace,A,b,c)&
+!$OMP                SHARED(v_rspace,A,b,c,iref)&
 !$OMP                REDUCTION(+:my_ref_esp)
          DO y = v_rspace%pw_grid%bounds_local(1, b), v_rspace%pw_grid%bounds_local(2, b)
             DO x = v_rspace%pw_grid%bounds_local(1, a), v_rspace%pw_grid%bounds_local(2, a)
                DO z = v_rspace%pw_grid%bounds_local(1, c), v_rspace%pw_grid%bounds_local(2, c)
-                  IF (z == v_rspace%pw_grid%bounds(2, c)) THEN
+                  IF (z == iref) THEN
                      IF (c == 3) THEN
                         my_ref_esp = v_rspace%array(x, y, z) + my_ref_esp
                      ELSE IF (c == 2) THEN
@@ -128,7 +153,7 @@ CONTAINS
 
          CALL para_env%sum(my_ref_esp)
          my_ref_esp = my_ref_esp/ngrids_in_plane
-         ref_esp = my_ref_esp
+         gce%ref_esp = my_ref_esp
 
       END IF
 

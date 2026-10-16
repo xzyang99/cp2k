@@ -157,10 +157,12 @@ MODULE scf_control_types
       REAL(KIND=dp), DIMENSION(0:2, 0:2, 1:2) :: roks_parameter = -1.0_dp
    END TYPE scf_control_type
 
+   ! A negative ref_position samples the reference potential at the upper cell boundary
    TYPE gce_type
       LOGICAL                               :: do_gce = .FALSE.
       REAL(KIND=dp)                         :: target_workfunction = 0.16_dp, &
                                                ref_esp = 0.0_dp, &
+                                               ref_position = -1.0_dp, &
                                                mixing_coef = 0.3_dp, &
                                                prev_workfunction = -1001.0_dp, &
                                                nelec = 0.0_dp
@@ -636,6 +638,7 @@ CONTAINS
       gce%prev_workfunction = -1001.0_dp
       gce%ref_esp = 0.0_dp
       gce%mixing_coef = 0.3_dp
+      gce%ref_position = -1.0_dp
    END SUBROUTINE init_gce
 
 ! **************************************************************************************************
@@ -647,6 +650,8 @@ CONTAINS
       TYPE(gce_type), POINTER                            :: gce
       TYPE(section_vals_type), POINTER                   :: gce_section
 
+      LOGICAL                                            :: explicit
+
       CALL section_vals_val_get(gce_section, "_SECTION_PARAMETERS_", &
                                 l_val=gce%do_gce)
       IF (gce%do_gce) THEN
@@ -654,6 +659,11 @@ CONTAINS
                                    r_val=gce%target_workfunction)
          CALL section_vals_val_get(gce_section, "MIXING_COEF", &
                                    r_val=gce%mixing_coef)
+         CALL section_vals_val_get(gce_section, "REFERENCE_POSITION", explicit=explicit)
+         IF (explicit) THEN
+            CALL section_vals_val_get(gce_section, "REFERENCE_POSITION", r_val=gce%ref_position)
+            IF (gce%ref_position < 0.0_dp) CPABORT("GCE%REFERENCE_POSITION must not be negative.")
+         END IF
       END IF ! do gce
    END SUBROUTINE read_gce_section
 

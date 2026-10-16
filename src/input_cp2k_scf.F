@@ -2325,7 +2325,7 @@ CONTAINS
                           "total energy and the product of the target work function "// &
                           "and N_e^(abs,alpha).", &
                           citations=[Chai2024a], &
-                          n_keywords=3, &
+                          n_keywords=4, &
                           n_subsections=0, &
                           repeats=.FALSE.)
 
@@ -2361,6 +2361,20 @@ CONTAINS
                           type_of_var=real_t, &
                           default_r_val=0.3_dp, &
                           usage="MIXING_COEF 0.3")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name="REFERENCE_POSITION", &
+                          description="Distance from the lower cell boundary, along the normal of the "// &
+                          "planar counter charge, of the layer whose planar-averaged electrostatic "// &
+                          "potential is the reference of the work function. It should lie in the "// &
+                          "vacuum or solvent region. By default the upper cell boundary is used.", &
+                          repeats=.FALSE., &
+                          n_var=1, &
+                          type_of_var=real_t, &
+                          unit_str="angstrom", &
+                          usage="REFERENCE_POSITION 15.0")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

@@ -501,8 +501,7 @@ CONTAINS
 
       IF (dft_control%do_paep .OR. qs_env%scf_control%gce%do_gce) THEN
          CALL pw_transfer(v_hartree_gspace, v_hartree_rspace)
-         CALL planar_averaged_v_hartree_3d(v_hartree_rspace, dft_control, qs_env%scf_control%gce%do_gce, &
-                                           qs_env%scf_control%gce%ref_esp, para_env)
+         CALL planar_averaged_v_hartree_3d(v_hartree_rspace, dft_control, qs_env%scf_control%gce, para_env)
       END IF
 
       ! In case decouple periodic images and/or apply restraints to charges
